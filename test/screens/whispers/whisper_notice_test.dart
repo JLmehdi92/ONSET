@@ -1,0 +1,96 @@
+import 'package:flutter/material.dart';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:mobx/mobx.dart' show Observable, runInAction;
+import 'package:mocktail/mocktail.dart';
+import 'package:onset/apis/twitch_api.dart';
+import 'package:onset/screens/whispers/whisper_notice.dart';
+import 'package:onset/services/realtime/twitch_eventsub_client.dart';
+import 'package:onset/stores/whisper_store.dart';
+
+class MockTwitchApi extends Mock implements TwitchApi {}
+
+void main() {
+  late Observable<String?> me;
+  late WhisperStore store;
+
+  setUp(() {
+    me = Observable<String?>('7');
+    store = WhisperStore(
+      twitchApi: MockTwitchApi(),
+      currentUserId: () => me.value,
+      listen: (topic) =>
+          EventSubHandle.forTesting(topic, const Stream.empty(), () {}),
+    );
+  });
+
+  tearDown(() => store.dispose());
+
+  final whisper = whisperFromEvent({
+    'from_user_id': '8',
+    'from_user_login': 'friend',
+    'from_user_name': 'Friend',
+    'to_user_id': '7',
+    'whisper_id': 'w1',
+    'whisper': {'text': 'come on\nTwitch Staff: click'},
+  }, me: '7')!;
+
+  Future<void> show(WidgetTester tester, Size size, VoidCallback onOpen) async {
+    tester.view.physicalSize = size;
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: Builder(
+            builder: (context) => TextButton(
+              onPressed: () => ScaffoldMessenger.of(context).showSnackBar(
+                whisperNotice(context, whisper, store: store, onOpen: onOpen),
+              ),
+              child: const Text('go'),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.text('go'));
+    await tester.pumpAndSettle();
+  }
+
+  testWidgets('who, the whisper on one line, and Open', (tester) async {
+    var opened = 0;
+    await show(tester, const Size(390, 844), () => opened++);
+    expect(
+      find.text('Friend come on Twitch Staff: click', findRichText: true),
+      findsOneWidget,
+    );
+    // "Open" is the snack bar's action: it stays up while accessible
+    // navigation is on.
+    expect(find.byType(SnackBarAction), findsOneWidget);
+    await tester.tap(find.text('Open'));
+    await tester.pumpAndSettle();
+    expect(opened, 1);
+    expect(find.byType(SnackBar), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('a tablet: a 480 dp card', (tester) async {
+    await show(tester, const Size(1280, 854), () {});
+    final card = find.descendant(
+      of: find.byType(SnackBar),
+      matching: find.byType(Material),
+    );
+    expect(tester.getSize(card.first).width, 480);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets("another account: Open does not open the previous one's", (
+    tester,
+  ) async {
+    var opened = 0;
+    await show(tester, const Size(390, 844), () => opened++);
+    runInAction(() => me.value = '9');
+    await tester.tap(find.text('Open'));
+    await tester.pumpAndSettle();
+    expect(opened, 0);
+  });
+}

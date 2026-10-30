@@ -1,0 +1,33 @@
+name: CI
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - 'docs/**'
+      - '**.md'
+  pull_request:
+    branches: [main]
+# A newer push to main makes the previous check pointless.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+# Analyze and test only: no reason to write to the repository.
+permissions:
+  contents: read
+jobs:
+  test:
+    name: Check and test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      # Pinned: newer Flutter releases break extended_text_field and
+      # simple_icons and deprecate APIs the code still uses.
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: 3.38.4
+          channel: stable
+          cache: true
+      - run: flutter doctor -v
+      - run: flutter pub get
+      - run: flutter analyze
+      - run: flutter test

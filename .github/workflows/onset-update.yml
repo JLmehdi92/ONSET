@@ -1,0 +1,254 @@
+# Builds a signed arm64 APK on every push to main and publishes it as a
+# "build-N" release, which installed ONSET apps offer as an update.
+# One-time setup (secrets, keystore, token, token proxy):
+# docs/MISES_A_JOUR.md.
+#
+# No Twitch client secret is here: logged-out viewers get their token from
+# the token proxy (tool/token_proxy/), and the APK only gets the proxy's
+# public URL, from the repository variable TOKEN_PROXY_URL.
+#
+# Two jobs: `build` holds the secrets with read-only repository access and
+# no third-party action beyond GitHub's own, pinned to commits; `publish` can
+# write releases but never sees a secret, only the built APK.
+#
+# The releases of a public repository, and so their APKs, can be downloaded
+# by anyone: a build made while the repository is public never carries
+# UPDATE_TOKEN (the app then reads the public releases without one).
+name: ONSET update
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - 'docs/**'
+      - '**.md'
+
+concurrency:
+  group: onset-update
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build the update
+    # A manual run on another branch must not publish a "latest" build.
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      build: ${{ steps.build.outputs.build }}
+      # "true" when the APK carries UPDATE_TOKEN.
+      token: ${{ steps.visibility.outputs.private }}
+    steps:
+      # The token is used only when both the event and the repository as it
+      # is now say "private": re-running a run started while the repository
+      # was private, after making it public, must not bake the token in.
+      - name: Check the repository visibility
+        id: visibility
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_PRIVATE: ${{ github.event.repository.private }}
+        run: |
+          live="$(gh api "repos/$GITHUB_REPOSITORY" --jq .private)"
+          case "$EVENT_PRIVATE/$live" in
+            true/true) private=true ;;
+            true/false | false/true | false/false) private=false ;;
+            *)
+              echo "::error::Could not tell whether the repository is private"
+              exit 1
+              ;;
+          esac
+          echo "private=$private" >> "$GITHUB_OUTPUT"
+          if [ "$private" = true ]; then
+            echo "Private repository: the build carries the update token."
+          else
+            echo "The build carries no update token (event or repository is public)."
+          fi
+
+      # Names the missing secrets only, never a value. UPDATE_TOKEN is needed
+      # (and read) only when the repository is private.
+      #
+      # TOKEN_PROXY_URL is required too: without it every installed app
+      # would update to a build where logged-out viewers get no Twitch
+      # emotes, badges, browsing or search, with nothing in the log saying
+      # why. It is a variable, not a secret (the APK carries it anyway), and
+      # must be a plain https URL (the app refuses anything else).
+      - name: Check the secrets
+        env:
+          REPO_PRIVATE: ${{ steps.visibility.outputs.private }}
+          CLIENT_ID: ${{ secrets.CLIENT_ID }}
+          TOKEN_PROXY_URL: ${{ vars.TOKEN_PROXY_URL }}
+          UPDATE_TOKEN: ${{ steps.visibility.outputs.private == 'true' && secrets.UPDATE_TOKEN || '' }}
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          missing=""
+          for name in CLIENT_ID ANDROID_KEYSTORE_BASE64 \
+            ANDROID_KEYSTORE_PASSWORD ANDROID_KEY_ALIAS ANDROID_KEY_PASSWORD; do
+            if [ -z "${!name}" ]; then
+              missing="$missing $name"
+            fi
+          done
+          if [ "$REPO_PRIVATE" = true ]; then
+            if [ -z "$UPDATE_TOKEN" ]; then
+              missing="$missing UPDATE_TOKEN"
+            fi
+          fi
+          if [ -n "$missing" ]; then
+            echo "::error::Missing repository secrets:$missing (see docs/MISES_A_JOUR.md)"
+            exit 1
+          fi
+          # The app's own pattern (TwitchApi.tokenProxyUrlPattern): a URL it
+          # would refuse must not ship.
+          proxy_pattern='^https://[A-Za-z0-9.-]+(:[0-9]+)?(/[A-Za-z0-9._~/-]*)?$'
+          if [[ ! "$TOKEN_PROXY_URL" =~ $proxy_pattern ]]; then
+            echo "::error::The repository variable TOKEN_PROXY_URL is missing or is not a plain https:// URL (see docs/MISES_A_JOUR.md)"
+            exit 1
+          fi
+
+      # Actions are pinned to commits (tags can be moved). Secrets are passed
+      # to the run steps that need them, but every step of this job shares the
+      # runner, so only GitHub's own actions run here.
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+
+      - name: Set up Java
+        uses: actions/setup-java@c5195efecf7bdfc987ee8bae7a71cb8b11521c00 # v4.7.1
+        with:
+          distribution: temurin
+          java-version: 17
+
+      # Flutter straight from its repository, checked against the commit of
+      # the 3.38.4 tag, instead of a third-party setup action.
+      - name: Set up Flutter
+        run: |
+          git clone --depth 1 -b 3.38.4 https://github.com/flutter/flutter.git "$RUNNER_TEMP/flutter"
+          test "$(git -C "$RUNNER_TEMP/flutter" rev-parse HEAD)" = 66dd93f9a27ffe2a9bfc8297506ce066ff51265f
+          echo "$RUNNER_TEMP/flutter/bin" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/flutter/bin/flutter" --version
+
+      # build.gradle.kts reads android/key.properties and resolves storeFile
+      # against android/app.
+      - name: Install the signing key
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode --ignore-garbage > android/app/onset-release.jks
+          {
+            printf 'storePassword=%s\n' "$ANDROID_KEYSTORE_PASSWORD"
+            printf 'keyPassword=%s\n' "$ANDROID_KEY_PASSWORD"
+            printf 'keyAlias=%s\n' "$ANDROID_KEY_ALIAS"
+            printf 'storeFile=onset-release.jks\n'
+          } > android/key.properties
+
+      # Never add -v here: a verbose build prints its --dart-define values.
+      - name: Build the APK
+        id: build
+        env:
+          CLIENT_ID: ${{ secrets.CLIENT_ID }}
+          TOKEN_PROXY_URL: ${{ vars.TOKEN_PROXY_URL }}
+          # Empty when the repository is public: never in a public APK.
+          UPDATE_TOKEN: ${{ steps.visibility.outputs.private == 'true' && secrets.UPDATE_TOKEN || '' }}
+          UPDATE_REPO: ${{ github.repository }}
+          # Optional: without these secrets the build simply has no Firebase.
+          FIREBASE_API_KEY: ${{ secrets.FIREBASE_API_KEY }}
+          FIREBASE_APP_ID_ANDROID: ${{ secrets.FIREBASE_APP_ID_ANDROID }}
+          FIREBASE_APP_ID_IOS: ${{ secrets.FIREBASE_APP_ID_IOS }}
+          FIREBASE_MESSAGING_SENDER_ID: ${{ secrets.FIREBASE_MESSAGING_SENDER_ID }}
+          FIREBASE_PROJECT_ID: ${{ secrets.FIREBASE_PROJECT_ID }}
+          FIREBASE_STORAGE_BUCKET: ${{ secrets.FIREBASE_STORAGE_BUCKET }}
+        # Build numbers are 2000 + the run number, so they start at 2001 and
+        # only grow: Android installs an update (and the app offers one) only
+        # with a higher build number.
+        run: |
+          BUILD=$((2000 + GITHUB_RUN_NUMBER))
+          echo "build=$BUILD" >> "$GITHUB_OUTPUT"
+          flutter pub get
+          flutter build apk --release \
+            --target-platform android-arm64 \
+            --build-number="$BUILD" \
+            --dart-define=CLIENT_ID="$CLIENT_ID" \
+            --dart-define=TOKEN_PROXY_URL="$TOKEN_PROXY_URL" \
+            --dart-define=UPDATE_TOKEN="$UPDATE_TOKEN" \
+            --dart-define=UPDATE_REPO="$UPDATE_REPO" \
+            --dart-define=FIREBASE_API_KEY="$FIREBASE_API_KEY" \
+            --dart-define=FIREBASE_APP_ID_ANDROID="$FIREBASE_APP_ID_ANDROID" \
+            --dart-define=FIREBASE_APP_ID_IOS="$FIREBASE_APP_ID_IOS" \
+            --dart-define=FIREBASE_MESSAGING_SENDER_ID="$FIREBASE_MESSAGING_SENDER_ID" \
+            --dart-define=FIREBASE_PROJECT_ID="$FIREBASE_PROJECT_ID" \
+            --dart-define=FIREBASE_STORAGE_BUCKET="$FIREBASE_STORAGE_BUCKET"
+          mkdir -p onset-update
+          cp build/app/outputs/flutter-apk/app-release.apk onset-update/onset-arm64.apk
+          (cd onset-update && sha256sum onset-arm64.apk | cut -d ' ' -f 1 > onset-arm64.apk.sha256)
+          git log -1 --format=%s > onset-update/notes.txt
+
+      - name: Remove the signing key
+        if: always()
+        run: rm -f android/app/onset-release.jks android/key.properties
+
+      - name: Keep the APK for the publish job
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: onset-update
+          path: onset-update/
+          retention-days: 1
+          if-no-files-found: error
+
+  publish:
+    name: Publish the release
+    needs: build
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      # Only to delete the APK artifact of a refused build.
+      actions: write
+    steps:
+      # The repository may have been made public while the APK was built:
+      # a build that carries the token (or that does not say it has none) is
+      # then never published, and its artifact is deleted.
+      - name: Check the repository is still private
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TOKEN_BUILD: ${{ needs.build.outputs.token }}
+        run: |
+          live="$(gh api "repos/$GITHUB_REPOSITORY" --jq .private)"
+          if [ "$TOKEN_BUILD" != false ] && [ "$live" != true ]; then
+            ids="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/artifacts" \
+              --jq '.artifacts[] | select(.name == "onset-update") | .id')"
+            for id in $ids; do
+              gh api -X DELETE "repos/$GITHUB_REPOSITORY/actions/artifacts/$id"
+            done
+            echo "::error::The repository is not private: this build may carry the update token, so it is not published and its artifact is deleted. Run the workflow again."
+            exit 1
+          fi
+
+      - name: Fetch the APK
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: onset-update
+          path: onset-update
+
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BUILD: ${{ needs.build.outputs.build }}
+        run: |
+          cd onset-update
+          gh release create "build-$BUILD" onset-arm64.apk onset-arm64.apk.sha256 \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "ONSET build $BUILD" \
+            --notes-file notes.txt \
+            --target "$GITHUB_SHA" \
+            --latest

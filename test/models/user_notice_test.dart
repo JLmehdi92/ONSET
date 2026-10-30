@@ -1,0 +1,348 @@
+import 'package:flutter_test/flutter_test.dart';
+import 'package:onset/models/irc.dart';
+import 'package:onset/models/user_notice.dart';
+
+import '../fixtures/irc_messages.dart';
+
+UserNotice _parse(String raw) =>
+    UserNotice.fromTags(IRCMessage.fromString(raw).tags);
+
+void main() {
+  group('UserNotice.fromTags', () {
+    test('reads a resub that shares its streak', () {
+      final notice = _parse(resubStreak);
+
+      expect(notice.kind, UserNoticeKind.resub);
+      expect(notice.tier, 'Tier 1');
+      expect(notice.isPrime, isFalse);
+      expect(notice.cumulativeMonths, 14);
+      expect(notice.streakMonths, 5);
+      expect(notice.shouldShareStreak, isTrue);
+      expect(
+        notice.systemMessage,
+        "ReSubber subscribed at Tier 1. They've subscribed for 14 months, "
+        'currently on a 5 month streak!',
+      );
+    });
+
+    test('keeps a hidden streak hidden', () {
+      final notice = _parse(resubHiddenStreak);
+
+      expect(notice.streakMonths, 5);
+      expect(notice.shouldShareStreak, isFalse);
+    });
+
+    test('reads a Prime sub', () {
+      final notice = _parse(primeSub);
+
+      expect(notice.kind, UserNoticeKind.sub);
+      expect(notice.tier, 'Prime');
+      expect(notice.isPrime, isTrue);
+      expect(notice.cumulativeMonths, 1);
+      expect(notice.systemMessage, 'PrimeUser subscribed with Prime.');
+    });
+
+    test('reads a gift and its recipient', () {
+      final notice = _parse(subGift);
+
+      expect(notice.kind, UserNoticeKind.subGift);
+      expect(notice.tier, 'Tier 1');
+      expect(notice.recipientDisplayName, 'Lucky');
+      expect(notice.senderCount, 3);
+      expect(notice.communityGiftId, isNull);
+      expect(notice.isPartOfMassGift, isFalse);
+    });
+
+    test('reads the legacy anonymous gift kind', () {
+      expect(_parse(anonymousSubGiftLegacy).kind, UserNoticeKind.anonSubGift);
+    });
+
+    test('reads a gift bomb header', () {
+      final notice = _parse(massGiftHeader);
+
+      expect(notice.kind, UserNoticeKind.communityGift);
+      expect(notice.isMassGiftHeader, isTrue);
+      expect(notice.massGiftCount, 5);
+      expect(notice.senderCount, 50);
+      expect(notice.communityGiftId, '1234567890123456789');
+    });
+
+    test('a negative gift bomb count reads as none', () {
+      final notice = UserNotice.fromTags(const {
+        'msg-id': 'submysterygift',
+        'msg-param-mass-gift-count': '-5',
+      });
+
+      expect(notice.massGiftCount, 0);
+    });
+
+    test('ties every gift of a bomb to its header', () {
+      for (final raw in massGiftRecipients) {
+        final notice = _parse(raw);
+
+        expect(notice.kind, UserNoticeKind.subGift);
+        expect(notice.isPartOfMassGift, isTrue);
+        expect(notice.communityGiftId, '1234567890123456789');
+        expect(notice.senderCount, 0);
+      }
+      expect(_parse(massGiftRecipients[2]).recipientDisplayName, 'Viewer3');
+    });
+
+    test('reads an anonymous gift bomb header', () {
+      final notice = _parse(anonymousMassGift);
+
+      expect(notice.kind, UserNoticeKind.communityGift);
+      expect(notice.massGiftCount, 5);
+      expect(notice.senderCount, 0);
+    });
+
+    test('reads a gift being continued', () {
+      final notice = _parse(giftPaidUpgrade);
+
+      expect(notice.kind, UserNoticeKind.giftPaidUpgrade);
+      expect(
+        notice.systemMessage,
+        'Upgrader is continuing the Gift Sub they got from Gifter!',
+      );
+    });
+
+    test('reads who sent the notice', () {
+      final notice = _parse(resubStreak);
+
+      expect(notice.displayName, 'ReSubber');
+      expect(notice.login, 'resubber');
+      expect(notice.userId, '20001');
+      expect(notice.roomId, '12345');
+      expect(notice.sourceRoomId, isNull);
+      expect(notice.isAnonymous, isFalse);
+      expect(notice.isHistorical, isFalse);
+    });
+
+    test('reads the gift months and the recipient login', () {
+      expect(_parse(subGift).giftMonths, 1);
+      expect(_parse(multiMonthGift).giftMonths, 3);
+      expect(_parse(subGift).recipientLogin, 'lucky');
+      expect(_parse(primeSub).giftMonths, isNull);
+    });
+
+    test("spots Twitch's anonymous gifter by its user id", () {
+      final notice = _parse(anonymousSubGift);
+
+      expect(notice.kind, UserNoticeKind.subGift);
+      expect(notice.isAnonymous, isTrue);
+      expect(_parse(anonymousMassGift).isAnonymous, isTrue);
+    });
+
+    test('spots an anonymous gift by its legacy msg-id', () {
+      expect(_parse(anonymousSubGiftLegacy).isAnonymous, isTrue);
+      expect(
+        UserNotice.fromTags(const {'msg-id': 'anonsubmysterygift'}).isAnonymous,
+        isTrue,
+      );
+    });
+
+    test('spots an anonymous gift by its login alone', () {
+      expect(
+        UserNotice.fromTags(const {
+          'msg-id': 'subgift',
+          'login': 'ananonymousgifter',
+        }).isAnonymous,
+        isTrue,
+      );
+    });
+
+    test('reads an extended sub and the month it runs to', () {
+      final notice = _parse(extendSub);
+
+      expect(notice.kind, UserNoticeKind.extendSub);
+      expect(notice.benefitEndMonth, 6);
+      expect(notice.tier, 'Tier 1');
+    });
+
+    test('knows the reward gift kind', () {
+      expect(
+        UserNotice.fromTags(const {'msg-id': 'rewardgift'}).kind,
+        UserNoticeKind.rewardGift,
+      );
+    });
+
+    test('keys a gift bomb by its community gift id', () {
+      final header = _parse(massGiftHeader);
+
+      expect(header.originId, '4e 29 ab');
+      expect(header.giftBombKey, '1234567890123456789');
+      expect(_parse(massGiftRecipients.first).giftBombKey, header.giftBombKey);
+    });
+
+    test('falls back to the origin id when there is no community gift id', () {
+      final notice = UserNotice.fromTags(const {
+        'msg-id': 'submysterygift',
+        'msg-param-origin-id': '4e 29 ab',
+      });
+
+      expect(notice.communityGiftId, isNull);
+      expect(notice.giftBombKey, '4e 29 ab');
+    });
+
+    test('has no gift bomb key without either id', () {
+      expect(_parse(primeSub).giftBombKey, isNull);
+    });
+
+    test('reads a notice replayed from history', () {
+      expect(_parse(massGiftHeaderHistorical).isHistorical, isTrue);
+    });
+
+    test('reads the channel a shared-chat notice came from', () {
+      final notice = _parse(massGiftHeaderShared);
+
+      expect(notice.sourceRoomId, '99999');
+      expect(notice.roomId, '12345');
+    });
+
+    test('reads the sub goal a sub counts towards', () {
+      final notice = _parse(subWithGoal);
+
+      expect(notice.goalCurrentContributions, 524);
+      expect(notice.goalTargetContributions, 1200);
+      expect(notice.goalContributionType, 'SUBS');
+      expect(notice.goalDescription, 'Road to 1200');
+      expect(notice.hasGoal, isTrue);
+      expect(_parse(primeSub).hasGoal, isFalse);
+    });
+
+    test('reads who gave the gift being continued', () {
+      final notice = _parse(giftPaidUpgrade);
+
+      expect(notice.senderLogin, 'gifter');
+      expect(notice.senderName, 'Gifter');
+    });
+
+    test('unescapes a semicolon and a backslash in a tag', () {
+      final notice = UserNotice.fromTags(const {
+        'msg-id': 'sub',
+        'system-msg': r'a\:b\\c',
+      });
+
+      expect(notice.systemMessage, r'a;b\c');
+    });
+
+    test("reads a raid's viewers and the raider's avatar at 70px", () {
+      final notice = _parse(raidNotice);
+
+      expect(notice.kind, UserNoticeKind.raid);
+      expect(notice.raidViewerCount, 15);
+      expect(
+        notice.raiderAvatarUrl,
+        'https://static-cdn.jtvnw.net/jtv_user_pictures/'
+        'raider-profile_image-70x70.png',
+      );
+      expect(_parse(primeSub).raiderAvatarUrl, isNull);
+    });
+
+    test('keeps the user message of a resub in the IRC body', () {
+      final message = IRCMessage.fromString(resubStreak);
+
+      expect(message.command, Command.userNotice);
+      expect(message.user, 'resubber');
+      expect(message.message, 'Kappa 14 months!');
+    });
+  });
+  group('IRCMessage.isUserNotice', () {
+    test('is true for a USERNOTICE and false for a chat message', () {
+      expect(IRCMessage.fromString(resubStreak).isUserNotice, isTrue);
+      expect(IRCMessage.fromString(basicPrivmsg).isUserNotice, isFalse);
+    });
+
+    test('is false for a chat message that mentions USERNOTICE', () {
+      final message = IRCMessage.fromString(
+        '@display-name=Nerd;id=nerd-1;room-id=12345;tmi-sent-ts=1;user-id=1 '
+        ':nerd!nerd@nerd.tmi.twitch.tv PRIVMSG #channel :a USERNOTICE is fun',
+      );
+      message.command = Command.clearMessage;
+
+      expect(message.isUserNotice, isFalse);
+      expect(message.notice, isNull);
+    });
+
+    test('survives a deletion of the notice', () {
+      final notice = IRCMessage.fromString(resubStreak);
+      IRCMessage.clearMessage(
+        messages: [notice],
+        bufferedMessages: [],
+        ircMessage: IRCMessage.fromString(clearMsgResub),
+      );
+
+      expect(notice.command, Command.clearMessage);
+      expect(notice.isUserNotice, isTrue);
+      expect(notice.notice?.kind, UserNoticeKind.resub);
+    });
+
+    test('survives a timeout of its author', () {
+      final notice = IRCMessage.fromString(resubStreak);
+      IRCMessage.clearChat(
+        messages: [notice],
+        bufferedMessages: [],
+        ircMessage: IRCMessage.fromString(clearChatResubber),
+      );
+
+      expect(notice.command, Command.clearChat);
+      expect(notice.isUserNotice, isTrue);
+      expect(notice.notice?.kind, UserNoticeKind.resub);
+    });
+
+    test('recognises a notice with no system-msg by its command', () {
+      final announcement = IRCMessage.fromString(
+        '@display-name=Mod;id=ann-1;login=mod;msg-id=announcement;'
+        'room-id=12345;system-msg=;tmi-sent-ts=1 '
+        ':tmi.twitch.tv USERNOTICE #channel :hello',
+      );
+      announcement.command = Command.clearMessage;
+
+      expect(announcement.isUserNotice, isTrue);
+      expect(announcement.notice?.kind, UserNoticeKind.announcement);
+    });
+  });
+
+  group('shared chat', () {
+    test('a partner notice takes its kind from source-msg-id', () {
+      expect(_parse(sharedResub).kind, UserNoticeKind.resub);
+      expect(_parse(sharedSubGift).kind, UserNoticeKind.subGift);
+      expect(_parse(sharedMassGiftHeader).kind, UserNoticeKind.communityGift);
+      expect(_parse(sharedMassGiftRecipient).kind, UserNoticeKind.subGift);
+      expect(_parse(sharedAnnouncement).kind, UserNoticeKind.announcement);
+    });
+
+    test('a partner notice still knows where it came from', () {
+      final notice = _parse(sharedMassGiftHeader);
+
+      expect(notice.sourceRoomId, '99999');
+      expect(notice.roomId, '12345');
+      expect(notice.isMassGiftHeader, isTrue);
+      expect(_parse(sharedMassGiftRecipient).isPartOfMassGift, isTrue);
+    });
+
+    test('a shared notice without source-msg-id is unknown', () {
+      expect(
+        UserNotice.fromTags(const {'msg-id': 'sharedchatnotice'}).kind,
+        UserNoticeKind.unknown,
+      );
+    });
+  });
+
+  test('IRCMessage.noticeText words a gift bomb for each channel name', () {
+    final message = IRCMessage.fromString(massGiftHeader);
+
+    String text(String channelName) =>
+        message.noticeText(channelName: channelName).map((s) => s.text).join();
+
+    expect(text('Here'), contains("Here's community"));
+    expect(text('Partner'), contains("Partner's community"));
+    expect(
+      identical(
+        message.noticeText(channelName: 'Partner'),
+        message.noticeText(channelName: 'Partner'),
+      ),
+      isTrue,
+    );
+  });
+}

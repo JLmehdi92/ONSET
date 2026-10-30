@@ -1,0 +1,35 @@
+# Only for deploying with Wrangler (the Cloudflare CLI) or Cloudflare's Git
+# integration. The dashboard setup in README.md does not need this file.
+#
+# No secrets here, ever. TWITCH_CLIENT_ID and TWITCH_CLIENT_SECRET (of the
+# "ONSET public" Twitch application, not the login one) are Cloudflare
+# secrets, set in the dashboard (Settings > Variables and Secrets) or with
+# `wrangler secret put TWITCH_CLIENT_SECRET`.
+#
+# Careful: a Wrangler deploy replaces the bindings set in the dashboard with
+# the ones below (secrets are kept).
+
+name = "onset-token"
+main = "worker.js"
+compatibility_date = "2025-09-01"
+workers_dev = true
+
+# Per-IP limit enforced by Cloudflare (approximate, per Cloudflare location).
+# It cannot be added from the dashboard; without it the Worker falls back to
+# a best-effort counter in each isolate. namespace_id is any integer unique
+# to the Cloudflare account.
+[[ratelimits]]
+name = "RATE_LIMITER"
+namespace_id = "4201"
+
+  [ratelimits.simple]
+  limit = 10
+  period = 60
+
+# Required: the shared token and the times it was last checked and minted.
+# Create the namespace (dashboard: Storage & Databases > Workers KV) and put
+# its id here; until then a deploy fails, as it should. The id is not a
+# secret.
+[[kv_namespaces]]
+binding = "TOKEN_CACHE"
+id = "<your KV namespace id>"

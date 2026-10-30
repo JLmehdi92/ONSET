@@ -1,0 +1,25 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "onset",
+      "request": "launch",
+      "type": "dart",
+      "args": ["--dart-define-from-file=.env"]
+    },
+    {
+      "name": "onset (profile mode)",
+      "request": "launch",
+      "type": "dart",
+      "flutterMode": "profile",
+      "args": ["--dart-define-from-file=.env"]
+    },
+    {
+      "name": "onset (release mode)",
+      "request": "launch",
+      "type": "dart",
+      "flutterMode": "release",
+      "args": ["--dart-define-from-file=.env"]
+    }
+  ]
+}

@@ -1,0 +1,762 @@
+import 'package:dio/dio.dart';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:http_mock_adapter/http_mock_adapter.dart';
+import 'package:onset/apis/base_api_client.dart';
+import 'package:onset/apis/twitch_api.dart';
+import 'package:onset/apis/twitch_auth_interceptor.dart';
+import 'package:onset/apis/unauthorized_interceptor.dart';
+import 'package:onset/models/emotes.dart';
+
+import '../fixtures/api_responses.dart';
+
+void main() {
+  late Dio dio;
+  late DioAdapter dioAdapter;
+  late TwitchApi api;
+
+  setUp(() {
+    dio = Dio(BaseOptions());
+    dioAdapter = DioAdapter(dio: dio);
+    api = TwitchApi(dio);
+  });
+
+  group('getEmotesGlobal', () {
+    test('returns list of global Twitch emotes', () async {
+      dioAdapter.onGet(
+        'https://api.twitch.tv/helix/chat/emotes/global',
+        (server) => server.reply(200, twitchEmotesGlobalResponse),
+      );
+
+      final emotes = await api.getEmotesGlobal();
+
+      expect(emotes, hasLength(2));
+      expect(emotes[0].name, 'Kappa');
+      expect(emotes[0].type, EmoteType.twitchGlobal);
+      expect(emotes[0].url, contains('25'));
+      expect(emotes[1].name, 'Keepo');
+    });
+  });
+
+  group('getBadgesGlobal', () {
+    test('returns map of badge set/version to ChatBadge', () async {
+      dioAdapter.onGet(
+        'https://api.twitch.tv/helix/chat/badges/global',
+        (server) => server.reply(200, twitchBadgesGlobalResponse),
+      );
+
+      final badges = await api.getBadgesGlobal();
+
+      expect(badges, hasLength(1));
+      expect(badges['subscriber/0'], isNotNull);
+      expect(badges['subscriber/0']!.name, 'Subscriber');
+      expect(badges['subscriber/0']!.url, contains('4x.png'));
+    });
+
+    test('handles multiple versions per badge set', () async {
+      dioAdapter.onGet(
+        'https://api.twitch.tv/helix/chat/badges/global',
+        (server) => server.reply(200, {
+          'data': [
+            {
+              'set_id': 'subscriber',
+              'versions': [
+                {
+                  'id': '0',
+                  'image_url_1x': 'https://cdn/1x.png',
+                  'image_url_2x': 'https://cdn/2x.png',
+                  'image_url_4x': 'https://cdn/4x.png',
+                  'title': 'Subscriber',
+                  'description': '0 months',
+                },
+                {
+                  'id': '3',
+                  'image_url_1x': 'https://cdn/3mo/1x.png',
+                  'image_url_2x': 'https://cdn/3mo/2x.png',
+                  'image_url_4x': 'https://cdn/3mo/4x.png',
+                  'title': '3-Month Subscriber',
+                  'description': '3 months',
+                },
+              ],
+            },
+          ],
+        }),
+      );
+
+      final badges = await api.getBadgesGlobal();
+
+      expect(badges, hasLength(2));
+      expect(badges['subscriber/0']!.name, 'Subscriber');
+      expect(badges['subscriber/3']!.name, '3-Month Subscriber');
+    });
+  });
+
+  group('getUser', () {
+    test('returns user by login', () async {
+      dioAdapter.onGet(
+        'https://api.twitch.tv/helix/users',
+        (server) => server.reply(200, twitchUserResponse),
+        queryParameters: {'login': 'testuser'},
+      );
+
+      final user = await api.getUser(userLogin: 'testuser');
+
+      expect(user.id, '12345');
+      expect(user.login, 'testuser');
+      expect(user.displayName, 'TestUser');
+      expect(user.profileImageUrl, 'https://cdn/profile.png');
+      expect(user.createdAt, DateTime.utc(2019, 3, 12, 15, 4, 5));
+    });
+
+    test('a missing or odd creation date reads as unknown', () async {
+      for (final createdAt in [null, 'yesterday', 42]) {
+        dioAdapter.onGet(
+          'https://api.twitch.tv/helix/users',
+          (server) => server.reply(200, {
+            'data': [
+              {
+                'id': '1',
+                'login': 'a',
+                'display_name': 'A',
+                'profile_image_url': '',
+                'created_at': ?createdAt,
+              },
+            ],
+          }),
+          queryParameters: {'login': 'a'},
+        );
+        expect((await api.getUser(userLogin: 'a')).createdAt, isNull);
+      }
+    });
+
+    test('returns user by id', () async {
+      dioAdapter.onGet(
+        'https://api.twitch.tv/helix/users',
+        (server) => server.reply(200, twitchUserResponse),
+        queryParameters: {'id': '12345'},
+      );
+
+      final user = await api.getUser(id: '12345');
+
+      expect(user.id, '12345');
+    });
+
+    test('throws NotFoundException for unknown user', () {
+      dioAdapter.onGet(
+        'https://api.twitch.tv/helix/users',
+        (server) => server.reply(200, {'data': <dynamic>[]}),
+        queryParameters: {'login': 'doesnotexist'},
+      );
+
+      expect(
+        () => api.getUser(userLogin: 'doesnotexist'),
+        throwsA(isA<NotFoundException>()),
+      );
+    });
+  });
+
+  group('getStream', () {
+    test('returns stream for online user', () async {
+      dioAdapter.onGet(
+        'https://api.twitch.tv/helix/streams',
+        (server) => server.reply(200, twitchStreamResponse),
+        queryParameters: {'user_login': 'testuser'},
+      );
+
+      final stream = await api.getStream(userLogin: 'testuser');
+
+      expect(stream.userName, 'TestUser');
+      expect(stream.gameName, 'Just Chatting');
+      expect(stream.viewerCount, 1000);
+    });
+
+    test('throws ApiException for offline user', () {
+      dioAdapter.onGet(
+        'https://api.twitch.tv/helix/streams',
+        (server) => server.reply(200, {
+          'data': <dynamic>[],
+          'pagination': <String, String>{},
+        }),
+        queryParameters: {'user_login': 'offlineuser'},
+      );
+
+      expect(
+        () => api.getStream(userLogin: 'offlineuser'),
+        throwsA(
+          isA<ApiException>().having(
+            (e) => e.message,
+            'message',
+            contains('offlineuser'),
+          ),
+        ),
+      );
+    });
+  });
+
+  group('getStreamsByIds', () {
+    test('builds query string for multiple user IDs', () async {
+      // getStreamsByIds manually builds URL: /streams?user_id=1&user_id=2&first=100
+      dioAdapter.onGet(
+        'https://api.twitch.tv/helix/streams?user_id=111&user_id=222&first=100',
+        (server) => server.reply(200, {
+          'data': [
+            {
+              'user_id': '111',
+              'user_login': 'user1',
+              'user_name': 'User1',
+              'game_id': '1',
+              'game_name': 'Game',
+              'title': 'Stream 1',
+              'viewer_count': 100,
+              'started_at': '2024-01-01T00:00:00Z',
+              'thumbnail_url': 'https://cdn/1.jpg',
+            },
+            {
+              'user_id': '222',
+              'user_login': 'user2',
+              'user_name': 'User2',
+              'game_id': '2',
+              'game_name': 'Game 2',
+              'title': 'Stream 2',
+              'viewer_count': 200,
+              'started_at': '2024-01-01T00:00:00Z',
+              'thumbnail_url': 'https://cdn/2.jpg',
+            },
+          ],
+          'pagination': <String, String>{},
+        }),
+      );
+
+      final result = await api.getStreamsByIds(userIds: ['111', '222']);
+
+      expect(result.data, hasLength(2));
+      expect(result.data[0].userName, 'User1');
+      expect(result.data[1].userName, 'User2');
+    });
+  });
+
+  group('revokeToken', () {
+    test('posts the client id and token as a form', () async {
+      Object? sent;
+      String? type;
+      dio.interceptors.add(
+        InterceptorsWrapper(
+          onRequest: (options, handler) {
+            sent = options.data;
+            type = options.contentType;
+            handler.next(options);
+          },
+        ),
+      );
+      dioAdapter.onPost(
+        'https://id.twitch.tv/oauth2/revoke',
+        (server) => server.reply(200, null),
+        data: Matchers.any,
+      );
+
+      await api.revokeToken(token: 'user_token');
+
+      expect((sent as Map)['token'], 'user_token');
+      expect((sent as Map).containsKey('client_id'), isTrue);
+      expect(type, Headers.formUrlEncodedContentType);
+    });
+  });
+
+  group('a token other than the session\'s', () {
+    test('getUserInfo(token:) reads that token\'s user, quietly', () async {
+      final sent = <RequestOptions>[];
+      dio.interceptors.add(
+        InterceptorsWrapper(
+          onRequest: (options, handler) {
+            sent.add(options);
+            handler.next(options);
+          },
+        ),
+      );
+      dioAdapter.onGet(
+        'https://api.twitch.tv/helix/users',
+        (server) => server.reply(200, {
+          'data': [
+            {
+              'id': '2',
+              'login': 'other',
+              'display_name': 'Other',
+              'profile_image_url': '',
+            },
+          ],
+        }),
+      );
+
+      final user = await api.getUserInfo(token: 'page_token');
+
+      expect(user.id, '2');
+      expect(sent.single.headers['Authorization'], 'Bearer page_token');
+      expect(sent.single.extra[UnauthorizedInterceptor.quiet], isTrue);
+    });
+
+    test(
+      'tokenUserId sends the token alone (no Client-Id of this app)',
+      () async {
+        final sent = <RequestOptions>[];
+        dio.interceptors.add(
+          InterceptorsWrapper(
+            onRequest: (options, handler) {
+              sent.add(options);
+              handler.next(options);
+            },
+          ),
+        );
+        dioAdapter.onGet(
+          'https://id.twitch.tv/oauth2/validate',
+          (server) => server.reply(200, {'user_id': '777'}),
+        );
+        await api.tokenUserId('web_token');
+        expect(sent.single.headers['Authorization'], 'OAuth web_token');
+        expect(sent.single.headers.containsKey('Client-Id'), isFalse);
+        expect(
+          sent.single.extra[TwitchAuthInterceptor.noSessionHeaders],
+          isTrue,
+        );
+      },
+    );
+
+    test(
+      'tokenUserId: whose a token is (any app), null when refused',
+      () async {
+        dioAdapter.onGet(
+          'https://id.twitch.tv/oauth2/validate',
+          (server) => server.reply(200, {
+            ...twitchValidateTokenResponse,
+            'client_id': 'the_web_client',
+            'user_id': '777',
+          }),
+        );
+        expect(await api.tokenUserId('web_token'), '777');
+
+        dioAdapter.onGet(
+          'https://id.twitch.tv/oauth2/validate',
+          (server) => server.reply(401, {'message': 'invalid access token'}),
+        );
+        expect(await api.tokenUserId('dead_token'), isNull);
+      },
+    );
+  });
+
+  group('validateToken', () {
+    setUp(() => api = TwitchApi(dio, appClientId: 'test_client_id'));
+
+    test('returns true for valid token', () async {
+      dioAdapter.onGet(
+        'https://id.twitch.tv/oauth2/validate',
+        (server) => server.reply(200, twitchValidateTokenResponse),
+      );
+
+      final isValid = await api.validateToken(token: 'valid_token');
+
+      expect(isValid, isTrue);
+    });
+
+    test("a valid token of another app is refused (it is not this app's "
+        'login)', () async {
+      dioAdapter.onGet(
+        'https://id.twitch.tv/oauth2/validate',
+        (server) => server.reply(200, {
+          ...twitchValidateTokenResponse,
+          'client_id': 'someone_elses_app',
+        }),
+      );
+
+      expect(await api.validateToken(token: 'foreign_token'), isFalse);
+    });
+
+    test('a validation without a client id is refused', () async {
+      dioAdapter.onGet(
+        'https://id.twitch.tv/oauth2/validate',
+        (server) => server.reply(200, {
+          'login': 'testuser',
+          'user_id': '12345',
+          'expires_in': 5000000,
+        }),
+      );
+
+      expect(await api.validateToken(token: 'odd_token'), isFalse);
+    });
+
+    test('returns false for expired token (401)', () async {
+      dioAdapter.onGet(
+        'https://id.twitch.tv/oauth2/validate',
+        (server) => server.reply(401, {'message': 'invalid access token'}),
+      );
+
+      final isValid = await api.validateToken(token: 'expired_token');
+
+      expect(isValid, isFalse);
+    });
+
+    test('rethrows on server error', () {
+      dioAdapter.onGet(
+        'https://id.twitch.tv/oauth2/validate',
+        (server) => server.reply(500, null),
+      );
+
+      expect(
+        () => api.validateToken(token: 'some_token'),
+        throwsA(isA<ServerException>()),
+      );
+    });
+  });
+
+  group('revokeToken', () {
+    test("revokes with the token's own app client id", () async {
+      api = TwitchApi(dio, appClientId: 'test_client_id');
+      dioAdapter
+        ..onPost(
+          'https://id.twitch.tv/oauth2/revoke',
+          (server) => server.reply(200, null),
+          data: {'client_id': 'other_app', 'token': 'theirs'},
+        )
+        ..onPost(
+          'https://id.twitch.tv/oauth2/revoke',
+          (server) => server.reply(200, null),
+          data: {'client_id': 'test_client_id', 'token': 'ours'},
+        );
+      await api.revokeToken(token: 'theirs', clientId: 'other_app');
+      await api.revokeToken(token: 'ours');
+    });
+  });
+
+  group('checkToken', () {
+    setUp(() => api = TwitchApi(dio, appClientId: 'test_client_id'));
+
+    test("this app's token is valid", () async {
+      dioAdapter.onGet(
+        'https://id.twitch.tv/oauth2/validate',
+        (server) => server.reply(200, twitchValidateTokenResponse),
+      );
+      expect(await api.checkToken(token: 'ours'), TokenCheck.valid);
+    });
+
+    test(
+      "another app's token is valid, and said to be another app's",
+      () async {
+        dioAdapter.onGet(
+          'https://id.twitch.tv/oauth2/validate',
+          (server) => server.reply(200, {
+            ...twitchValidateTokenResponse,
+            'client_id': 'someone_elses_app',
+          }),
+        );
+        expect(
+          await api.checkToken(token: 'theirs'),
+          const TokenCheck.foreign('someone_elses_app'),
+        );
+        // The strict check (the login page's) still refuses it.
+        expect(await api.validateToken(token: 'theirs'), isFalse);
+      },
+    );
+
+    test('a token Twitch refuses is invalid', () async {
+      dioAdapter.onGet(
+        'https://id.twitch.tv/oauth2/validate',
+        (server) => server.reply(401, {'message': 'invalid access token'}),
+      );
+      expect(await api.checkToken(token: 'expired'), TokenCheck.invalid);
+    });
+
+    test('a network failure is not an answer', () {
+      dioAdapter.onGet(
+        'https://id.twitch.tv/oauth2/validate',
+        (server) => server.reply(500, null),
+      );
+      expect(
+        () => api.checkToken(token: 'some_token'),
+        throwsA(isA<ServerException>()),
+      );
+    });
+  });
+
+  group('getUserBlockedList', () {
+    test('returns blocked users from single page', () async {
+      dioAdapter.onGet(
+        'https://api.twitch.tv/helix/users/blocks',
+        (server) => server.reply(200, {
+          'data': [
+            {
+              'user_id': '99999',
+              'user_login': 'blockeduser',
+              'display_name': 'BlockedUser',
+            },
+          ],
+          'pagination': {'cursor': null},
+        }),
+        queryParameters: {'first': '100', 'broadcaster_id': '12345'},
+      );
+
+      final blocked = await api.getUserBlockedList(id: '12345');
+
+      expect(blocked, hasLength(1));
+      expect(blocked.first.userId, '99999');
+      expect(blocked.first.userLogin, 'blockeduser');
+    });
+
+    test('returns empty list when no users blocked', () async {
+      dioAdapter.onGet(
+        'https://api.twitch.tv/helix/users/blocks',
+        (server) => server.reply(200, {
+          'data': <dynamic>[],
+          'pagination': {'cursor': null},
+        }),
+        queryParameters: {'first': '100', 'broadcaster_id': '12345'},
+      );
+
+      final blocked = await api.getUserBlockedList(id: '12345');
+
+      expect(blocked, isEmpty);
+    });
+  });
+
+  group('getFollowedStreams', () {
+    test('can be asked quietly (no "Session expired" prompt)', () async {
+      final extras = <Map<String, dynamic>>[];
+      dio.interceptors.add(
+        InterceptorsWrapper(
+          onRequest: (options, handler) {
+            extras.add(Map.of(options.extra));
+            handler.next(options);
+          },
+        ),
+      );
+      dioAdapter.onGet(
+        'https://api.twitch.tv/helix/streams/followed',
+        (server) => server.reply(200, {
+          'data': <dynamic>[],
+          'pagination': <String, String>{},
+        }),
+        queryParameters: {'user_id': '7', 'first': '7'},
+      );
+
+      await api.getFollowedStreams(id: '7', first: 7, quiet: true);
+      await api.getFollowedStreams(id: '7', first: 7);
+
+      expect(extras[0][UnauthorizedInterceptor.quiet], isTrue);
+      expect(extras[1].containsKey(UnauthorizedInterceptor.quiet), isFalse);
+    });
+  });
+
+  group('isFollowing', () {
+    test('is true when the viewer follows the channel', () async {
+      dioAdapter.onGet(
+        'https://api.twitch.tv/helix/channels/followed',
+        (server) => server.reply(200, {
+          'data': [
+            {
+              'broadcaster_id': '42',
+              'broadcaster_login': 'streamer',
+              'broadcaster_name': 'Streamer',
+              'followed_at': '2026-01-01T00:00:00Z',
+            },
+          ],
+          'pagination': <String, String>{},
+          'total': 1,
+        }),
+        queryParameters: {'user_id': '7', 'broadcaster_id': '42'},
+      );
+
+      expect(await api.isFollowing(userId: '7', broadcasterId: '42'), isTrue);
+    });
+
+    test('is false for an empty answer or another channel', () async {
+      dioAdapter.onGet(
+        'https://api.twitch.tv/helix/channels/followed',
+        (server) => server.reply(200, {
+          'data': <dynamic>[],
+          'pagination': <String, String>{},
+          'total': 0,
+        }),
+        queryParameters: {'user_id': '7', 'broadcaster_id': '42'},
+      );
+      expect(await api.isFollowing(userId: '7', broadcasterId: '42'), isFalse);
+
+      dioAdapter.onGet(
+        'https://api.twitch.tv/helix/channels/followed',
+        (server) => server.reply(200, {
+          'data': [
+            {'broadcaster_id': '43'},
+          ],
+        }),
+        queryParameters: {'user_id': '7', 'broadcaster_id': '42'},
+      );
+      expect(await api.isFollowing(userId: '7', broadcasterId: '42'), isFalse);
+    });
+
+    test('refuses an id that is not a Twitch id', () {
+      expect(
+        () => api.isFollowing(userId: '7&x=1', broadcasterId: '42'),
+        throwsArgumentError,
+      );
+    });
+  });
+
+  group('getTopStreams', () {
+    test('can be asked quietly (no "Session expired" prompt)', () async {
+      final extras = <Map<String, dynamic>>[];
+      dio.interceptors.add(
+        InterceptorsWrapper(
+          onRequest: (options, handler) {
+            extras.add(Map.of(options.extra));
+            handler.next(options);
+          },
+        ),
+      );
+      dioAdapter.onGet(
+        'https://api.twitch.tv/helix/streams',
+        (server) => server.reply(200, {
+          'data': <dynamic>[],
+          'pagination': <String, String>{},
+        }),
+      );
+
+      await api.getTopStreams(quiet: true);
+      await api.getTopStreams();
+
+      expect(extras[0][UnauthorizedInterceptor.quiet], isTrue);
+      expect(extras[1].containsKey(UnauthorizedInterceptor.quiet), isFalse);
+    });
+
+    test('returns streams with pagination', () async {
+      dioAdapter.onGet(
+        'https://api.twitch.tv/helix/streams',
+        (server) => server.reply(200, twitchStreamResponse),
+      );
+
+      final streams = await api.getTopStreams();
+
+      expect(streams.data, hasLength(1));
+      expect(streams.data.first.userName, 'TestUser');
+      expect(streams.pagination['cursor'], 'next_cursor');
+    });
+
+    test('passes cursor for pagination', () async {
+      dioAdapter.onGet(
+        'https://api.twitch.tv/helix/streams',
+        (server) => server.reply(200, {
+          'data': <dynamic>[],
+          'pagination': <String, String>{},
+        }),
+        queryParameters: {'after': 'page2_cursor'},
+      );
+
+      final streams = await api.getTopStreams(cursor: 'page2_cursor');
+
+      expect(streams.data, isEmpty);
+    });
+
+    test('passes the language when one is picked', () async {
+      dioAdapter.onGet(
+        'https://api.twitch.tv/helix/streams',
+        (server) => server.reply(200, twitchStreamResponse),
+        queryParameters: {'after': 'c', 'language': 'fr'},
+      );
+
+      final streams = await api.getTopStreams(cursor: 'c', language: 'fr');
+
+      expect(streams.data, hasLength(1));
+    });
+  });
+
+  group('getStreamsUnderCategory', () {
+    test('asks for the category and the picked language', () async {
+      dioAdapter.onGet(
+        'https://api.twitch.tv/helix/streams',
+        (server) => server.reply(200, twitchStreamResponse),
+        queryParameters: {'game_id': '509658', 'language': 'ja'},
+      );
+
+      final streams = await api.getStreamsUnderCategory(
+        gameId: '509658',
+        language: 'ja',
+      );
+
+      expect(streams.data, hasLength(1));
+    });
+
+    test('leaves the language out for every language', () async {
+      dioAdapter.onGet(
+        'https://api.twitch.tv/helix/streams',
+        (server) => server.reply(200, twitchStreamResponse),
+        queryParameters: {'game_id': '509658'},
+      );
+
+      final streams = await api.getStreamsUnderCategory(gameId: '509658');
+
+      expect(streams.data, hasLength(1));
+    });
+  });
+
+  group('getChannel', () {
+    test('returns channel info', () async {
+      dioAdapter.onGet(
+        'https://api.twitch.tv/helix/channels',
+        (server) => server.reply(200, twitchChannelResponse),
+        queryParameters: {'broadcaster_id': '12345'},
+      );
+
+      final channel = await api.getChannel(userId: '12345');
+
+      expect(channel.broadcasterId, '12345');
+      expect(channel.broadcasterName, 'TestUser');
+      expect(channel.title, 'Test Stream');
+      expect(channel.gameName, 'Just Chatting');
+    });
+
+    test('throws ApiException for nonexistent channel', () {
+      dioAdapter.onGet(
+        'https://api.twitch.tv/helix/channels',
+        (server) => server.reply(200, {'data': <dynamic>[]}),
+        queryParameters: {'broadcaster_id': '99999'},
+      );
+
+      expect(
+        () => api.getChannel(userId: '99999'),
+        throwsA(isA<ApiException>()),
+      );
+    });
+  });
+
+  group('getEmotesChannel', () {
+    test('maps emote types correctly', () async {
+      dioAdapter.onGet(
+        'https://api.twitch.tv/helix/chat/emotes',
+        (server) => server.reply(200, {
+          'data': [
+            {
+              'id': '1',
+              'name': 'BitsEmote',
+              'emote_type': 'bitstier',
+              'owner_id': null,
+            },
+            {
+              'id': '2',
+              'name': 'FollowerEmote',
+              'emote_type': 'follower',
+              'owner_id': null,
+            },
+            {
+              'id': '3',
+              'name': 'SubEmote',
+              'emote_type': 'subscriptions',
+              'owner_id': '12345',
+            },
+          ],
+        }),
+        queryParameters: {'broadcaster_id': '12345'},
+      );
+
+      final emotes = await api.getEmotesChannel(id: '12345');
+
+      expect(emotes, hasLength(3));
+      expect(emotes[0].type, EmoteType.twitchBits);
+      expect(emotes[1].type, EmoteType.twitchFollower);
+      expect(emotes[2].type, EmoteType.twitchChannel);
+    });
+  });
+}

@@ -1,0 +1,293 @@
+name: onset
+description: A Twitch client for iOS and Android.
+
+# The following line prevents the package from being accidentally published to
+# pub.dev using `flutter pub publish`. This is preferred for private packages.
+publish_to: "none" # Remove this line if you wish to publish to pub.dev
+
+# The following defines the version and build number for your application.
+# A version number is three numbers separated by dots, like 1.2.43
+# followed by an optional build number separated by a +.
+# Both the version and the builder number may be overridden in flutter
+# build by specifying --build-name and --build-number, respectively.
+# In Android, build-name is used as versionName while build-number used as versionCode.
+# Read more about Android versioning at https://developer.android.com/studio/publish/versioning
+# In iOS, build-name is used as CFBundleShortVersionString while build-number is used as CFBundleVersion.
+# Read more about iOS versioning at
+# https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/CoreFoundationKeys.html
+# In Windows, build-name is used as the major, minor, and patch parts
+# of the product and file versions while build-number is used as the build suffix.
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.9.0
+
+# Dependencies specify other packages that your package needs in order to work.
+# To automatically upgrade your package dependencies to the latest versions
+# consider running `flutter pub upgrade --major-versions`. Alternatively,
+# dependencies can be manually updated by changing the version numbers below to
+# the latest version available on pub.dev. To see which dependencies have newer
+# versions available, run `flutter pub outdated`.
+dependencies:
+    flutter:
+        sdk: flutter
+    json_annotation: ^4.6.0
+
+    # The following adds the Cupertino Icons font to your application.
+    # Use with the CupertinoIcons class for iOS style icons.
+    cupertino_icons: ^1.0.2
+    web_socket_channel: ^3.0.0
+    flutter_secure_storage: ^9.2.2
+    intl: ^0.20.1
+    cached_network_image: ^3.1.0
+    webview_flutter: ^4.2.0
+    provider: ^6.0.1
+    mobx: ^2.0.7+4
+    flutter_mobx: ^2.0.0
+    shared_preferences: ^2.0.8
+    flutter_svg: ^2.0.5
+    url_launcher: ^6.0.17
+    package_info_plus: ^9.0.0
+    collection: ^1.16.0
+    clock: ^1.1.2
+    flutter_cache_manager: ^3.3.0
+    device_info_plus: ^12.3.0
+    wakelock_plus: ^1.1.2
+    simple_icons: ^14.6.1
+    # Vendored (packages/simple_pip_mode/VENDORED.md).
+    simple_pip_mode:
+        path: packages/simple_pip_mode
+    firebase_core: ^4.1.0
+    firebase_crashlytics: ^5.0.1
+    firebase_performance: ^0.11.0+1
+    firebase_analytics: ^12.0.1
+    advanced_in_app_review: ^1.1.3
+    webview_flutter_android: ^4.0.2
+    webview_flutter_wkwebview: ^3.4.3
+    photo_view: ^0.15.0
+    flutter_markdown_plus: ^1.0.7
+    path_provider: ^2.1.5
+    # Go-live notices: a periodic background check and local notifications.
+    # Pinned (newer releases need a newer Flutter, see CONTRIBUTING.md).
+    workmanager: 0.10.10
+    flutter_local_notifications: 22.3.1
+    # Times for scheduled reminders (already used by the plugin above).
+    timezone: ^0.11.2
+    # The system share sheet (pinned: newer releases need a newer Flutter).
+    share_plus: 12.0.2
+    dio: ^5.9.0
+    # Checks a downloaded update against its published SHA-256.
+    crypto: ^3.0.6
+    app_links: ^7.0.0
+    extended_text_field: ^16.0.2
+    native_device_orientation: ^2.1.0
+    media_kit: ^1.2.6
+    media_kit_video: ^2.0.1
+    media_kit_libs_video: ^1.0.7
+
+dev_dependencies:
+    flutter_test:
+        sdk: flutter
+
+    # The "flutter_lints" package below contains a set of recommended lints to
+    # encourage good coding practices. The lint set provided by the package is
+    # activated in the `analysis_options.yaml` file located at the root of your
+    # package. See that file for information about deactivating specific lint
+    # rules and activating additional ones.
+    flutter_lints: ^6.0.0
+    build_runner: ^2.1.1
+    json_serializable: ^6.0.0
+    mobx_codegen: ^2.0.6
+    # Fakes the share sheet in tests (share_plus 12.0.2's interface).
+    share_plus_platform_interface: 6.1.0
+    flutter_native_splash: ^2.0.5
+    flutter_launcher_icons: ^0.14.1
+    mocktail: ^1.0.4
+    fake_async: ^1.3.3
+    http_mock_adapter: ^0.6.1
+
+# For information on the generic Dart part of this file, see the
+# following page: https://dart.dev/tools/pub/pubspec
+
+# The following section is specific to Flutter packages.
+flutter:
+    # The following line ensures that the Material Icons font is
+    # included with your application, so that you can use the icons in
+    # the material Icons class.
+    uses-material-design: true
+
+    fonts:
+        # Inter everywhere: the free face closest to Twitch's own (Roobert is
+        # licensed). Weights are declared so bold is never synthesised.
+        - family: Inter
+          fonts:
+              - asset: assets/fonts/Inter-Light.ttf
+                weight: 300
+              - asset: assets/fonts/Inter-Regular.ttf
+                weight: 400
+              - asset: assets/fonts/Inter-Italic.ttf
+                weight: 400
+                style: italic
+              - asset: assets/fonts/Inter-Medium.ttf
+                weight: 500
+              - asset: assets/fonts/Inter-SemiBold.ttf
+                weight: 600
+              - asset: assets/fonts/Inter-Bold.ttf
+                weight: 700
+              - asset: assets/fonts/Inter-BoldItalic.ttf
+                weight: 700
+                style: italic
+              - asset: assets/fonts/Inter-ExtraBold.ttf
+                weight: 800
+              - asset: assets/fonts/Inter-Black.ttf
+                weight: 900
+
+    # To add assets to your application, add an assets section, like this:
+    # assets:
+    #   - images/a_dot_burr.jpeg
+    #   - images/a_dot_ham.jpeg
+
+    assets:
+        - assets/celebrations/rocket.svg
+        - assets/celebrations/gift_closed.png
+        - assets/celebrations/gift_open.png
+        - assets/celebrations/spark_lime.png
+        - assets/celebrations/spark_mint.png
+        - assets/celebrations/spark_white.png
+        - assets/celebrations/spark_dot.png
+        - assets/release-notes.md
+        # The Inter font's licence, shown on the Licenses page.
+        - assets/fonts/OFL.txt
+        # The ONSET mark: the app icon downscaled for 30, 52 and 72 dp tiles,
+        # each with its 1.5x-4.0x variants beside it (tool/onset_logo_assets.py).
+        - assets/icons/onset_logo_30.png
+        - assets/icons/onset_logo_52.png
+        - assets/icons/onset_logo_72.png
+
+    # An image asset can refer to one or more resolution-specific "variants", see
+    # https://flutter.dev/to/resolution-aware-images
+
+    # For details regarding adding assets from package dependencies, see
+    # https://flutter.dev/to/asset-from-package
+
+    # To add custom fonts to your application, add a fonts section here,
+    # in this "flutter" section. Each entry in this list should have a
+    # "family" key with the font family name, and a "fonts" key with a
+    # list giving the asset and other descriptors for the font. For
+    # example:
+    # fonts:
+    #   - family: Schyler
+    #     fonts:
+    #       - asset: fonts/Schyler-Regular.ttf
+    #       - asset: fonts/Schyler-Italic.ttf
+    #         style: italic
+    #   - family: Trajan Pro
+    #     fonts:
+    #       - asset: fonts/TrajanPro.ttf
+    #       - asset: fonts/TrajanPro_Bold.ttf
+    #         weight: 700
+    #
+    # For details regarding fonts from package dependencies,
+    # see https://flutter.dev/to/font-from-package
+
+flutter_native_splash:
+    # This package generates native code to customize Flutter's default white native splash screen
+    # with background color and splash image.
+    # Customize the parameters below, and run the following command in the terminal:
+    # flutter pub run flutter_native_splash:create
+    # To restore Flutter's default white splash screen, run the following command in the terminal:
+    # flutter pub run flutter_native_splash:remove
+
+    # color or background_image is the only required parameter.  Use color to set the background
+    # of your splash screen to a solid color.  Use background_image to set the background of your
+    # splash screen to a png image.  This is useful for gradients. The image will be stretch to the
+    # size of the app. Only one parameter can be used, color and background_image cannot both be set.
+    # The splash screen is maintained by hand, not generated: the launch tile
+    # (android/app/src/main/res/drawable-*dpi/launch_tile.png, written by
+    # tool/onset_logo_assets.py; splash_icon.xml for Android 12+) on
+    # #0A0A0A, and a plain #0A0A0A iOS launch screen; the
+    # Flutter launch intro starts from that frame. Running this generator
+    # would overwrite them.
+    color: "#0A0A0A"
+
+    # Optional parameters are listed below.  To enable a parameter, uncomment the line by removing
+    # the leading # character.
+
+    # The image parameter allows you to specify an image used in the splash screen.  It must be a
+    # png file and should be sized for 4x pixel density.
+    image: assets/icons/logo.png
+
+    # This property allows you to specify an image used as branding in the splash screen. It must be
+    # a png file. Currently, it is only supported for Android and iOS.
+    # branding: assets/dart.png
+
+    # Specify your branding image for dark mode.
+    #branding_dark: assets/dart_dark.png
+
+    # To position the branding image at the bottom of the screen you can use bottom, bottomRight,
+    # and bottomLeft. The default values is bottom if not specified or specified something else.
+    #
+    # Make sure this content mode value should not be similar to android_gravity value and ios_content_mode
+    # value.
+    # branding_mode: bottom
+
+    # The color_dark, background_image_dark, and image_dark are parameters that set the background
+    # and image when the device is in dark mode. If they are not specified, the app will use the
+    # parameters from above. If the image_dark parameter is specified, color_dark or
+    # background_image_dark must be specified.  color_dark and background_image_dark cannot both be
+    # set.
+    #color_dark: "#042a49"
+    #background_image_dark: "assets/dark-background.png"
+    #image_dark: assets/splash-invert.png
+
+    # The android, ios and web parameters can be used to disable generating a splash screen on a given
+    # platform.
+    #android: false
+    #ios: false
+    #web: false
+
+    # The position of the splash image can be set with android_gravity, ios_content_mode, and
+    # web_image_mode parameters.  All default to center.
+    #
+    # android_gravity can be one of the following Android Gravity (see
+    # https://developer.android.com/reference/android/view/Gravity): bottom, center,
+    # center_horizontal, center_vertical, clip_horizontal, clip_vertical, end, fill, fill_horizontal,
+    # fill_vertical, left, right, start, or top.
+    #android_gravity: center
+    #
+    # ios_content_mode can be one of the following iOS UIView.ContentMode (see
+    # https://developer.apple.com/documentation/uikit/uiview/contentmode): scaleToFill,
+    # scaleAspectFit, scaleAspectFill, center, top, bottom, left, right, topLeft, topRight,
+    # bottomLeft, or bottomRight.
+    #ios_content_mode: center
+    #
+    # web_image_mode can be one of the following modes: center, contain, stretch, and cover.
+    #web_image_mode: center
+
+    # To hide the notification bar, use the fullscreen parameter.  Has no affect in web since web
+    # has no notification bar.  Defaults to false.
+    # NOTE: Unlike Android, iOS will not automatically show the notification bar when the app loads.
+    #       To show the notification bar, add the following code to your Flutter app:
+    #       WidgetsFlutterBinding.ensureInitialized();
+    #       SystemChrome.setEnabledSystemUIOverlays([SystemUiOverlay.bottom, SystemUiOverlay.top]);
+    #fullscreen: true
+
+    # If you have changed the name(s) of your info.plist file(s), you can specify the filename(s)
+    # with the info_plist_files parameter.  Remove only the # characters in the three lines below,
+    # do not remove any spaces:
+    #info_plist_files:
+    #  - 'ios/Runner/Info-Debug.plist'
+    #  - 'ios/Runner/Info-Release.plist'
+
+flutter_launcher_icons:
+    image_path_android: "assets/icons/icon_onset.png"
+    image_path_ios: "assets/icons/icon_onset.png"
+    android: true
+    ios: true
+    remove_alpha_ios: true
+    # Android 8+ masks the adaptive layers instead of using the legacy icon, so
+    # these must be set too — otherwise the launcher keeps showing the old art.
+    # The foreground carries the mark scaled into the 66% safe zone; the
+    # background is the artwork's own lime, so both icon variants match.
+    adaptive_icon_background: "#D0F020"
+    adaptive_icon_foreground: "assets/icons/icon_onset_foreground.png"
