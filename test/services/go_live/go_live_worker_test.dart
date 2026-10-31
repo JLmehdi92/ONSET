@@ -1,5 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:onset/constants.dart';
+import 'package:onset/screens/settings/stores/settings_store.dart';
 import 'package:onset/services/go_live/go_live_worker.dart';
 
 void main() {
@@ -43,6 +44,107 @@ void main() {
     expect(sharesCrashLogsIn('[]'), isFalse);
     expect(sharesCrashLogsIn('{"shareCrashLogsAndAnalytics":"yes"}'), isFalse);
     expect(sharesCrashLogsIn('{"shareCrashLogsAndAnalytics":false}'), isFalse);
-    expect(sharesCrashLogsIn('{"shareCrashLogsAndAnalytics":true}'), isTrue);
+    expect(
+      sharesCrashLogsIn(
+        '{"shareCrashLogsAndAnalytics":true,'
+        '"telemetryConsentVersion":$kTelemetryConsentVersion}',
+      ),
+      isTrue,
+    );
+  });
+
+  test('the background check ignores an "on" saved before the consent '
+      'version', () {
+    // It can run after an update before the app has opened (and saved the
+    // migrated settings): an old "on" was ticked for the viewer.
+    expect(sharesCrashLogsIn('{"shareCrashLogsAndAnalytics":true}'), isFalse);
+    expect(
+      sharesCrashLogsIn(
+        '{"shareCrashLogsAndAnalytics":true,"telemetryConsentVersion":0}',
+      ),
+      isFalse,
+    );
+    expect(
+      sharesCrashLogsIn(
+        '{"shareCrashLogsAndAnalytics":true,"telemetryConsentVersion":"1"}',
+      ),
+      isFalse,
+    );
+  });
+
+  group('the background check starts Firebase', () {
+    const on =
+        '{"shareCrashLogsAndAnalytics":true,'
+        '"telemetryConsentVersion":$kTelemetryConsentVersion}';
+    const off =
+        '{"shareCrashLogsAndAnalytics":false,'
+        '"telemetryConsentVersion":$kTelemetryConsentVersion}';
+
+    Future<({int starts, List<bool> collection})> run(
+      List<String?> reads, {
+      bool firebaseStarts = true,
+    }) async {
+      var starts = 0;
+      final collection = <bool>[];
+      final queue = [...reads];
+      await initGoLiveTelemetry(
+        readSettings: () async => queue.removeAt(0),
+        startFirebase: () async {
+          starts++;
+          return firebaseStarts;
+        },
+        setCollection: collection.add,
+      );
+      return (starts: starts, collection: collection);
+    }
+
+    test('not at all for a viewer who does not share', () async {
+      for (final saved in [
+        null,
+        '{}',
+        off,
+        '{"shareCrashLogsAndAnalytics":true}',
+      ]) {
+        final result = await run([saved]);
+        expect(result.starts, 0, reason: '$saved');
+        expect(result.collection, isEmpty, reason: '$saved');
+      }
+    });
+
+    test('not when the settings do not read', () async {
+      var starts = 0;
+      await initGoLiveTelemetry(
+        readSettings: () async => throw StateError('no prefs'),
+        startFirebase: () async {
+          starts++;
+          return true;
+        },
+        setCollection: (_) => fail('collection set'),
+      );
+      expect(starts, 0);
+    });
+
+    test('and collects for a viewer who shares', () async {
+      final result = await run([on, on]);
+      expect(result.starts, 1);
+      expect(result.collection, [true]);
+    });
+
+    test(
+      'and turns collection off when the viewer opted out meanwhile',
+      () async {
+        // Read on, then the viewer turns the switch off in the app while
+        // Firebase starts: the second read wins.
+        final result = await run([on, off]);
+        expect(result.starts, 1);
+        expect(result.collection, [false]);
+      },
+    );
+
+    test('and leaves collection alone when Firebase does not start', () async {
+      final result = await run([on], firebaseStarts: false);
+      expect(result.starts, 1);
+      expect(result.collection, isEmpty);
+    });
   });
 }
