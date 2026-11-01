@@ -80,7 +80,7 @@ dependencies:
     share_plus: 12.0.2
     dio: ^5.9.0
     # Checks a downloaded update against its published SHA-256.
-    crypto: ^3.0.6
+    crypto: ^3.0.8
     app_links: ^7.0.0
     extended_text_field: ^16.0.2
     native_device_orientation: ^2.1.0
