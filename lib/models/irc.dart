@@ -8,6 +8,8 @@ import 'package:flutter/services.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:intl/intl.dart';
 import 'package:onset/constants.dart';
+import 'package:onset/l10n/enum_labels.dart';
+import 'package:onset/l10n/l10n.dart';
 import 'package:onset/models/badges.dart';
 import 'package:onset/models/chat_gif.dart';
 import 'package:onset/models/cheermote.dart';
@@ -40,6 +42,17 @@ const String _twitchIrcServer = 'tmi.twitch.tv';
 const String _emoteModeSuffix = '/default/dark/3.0';
 const String _staticEmoteSuffix = '/static/dark/3.0';
 const double _emojiSizeOffset = 5.0;
+
+/// The login of a line's sender who is not known any more (a deleted
+/// account in a VOD's replay or the chat's history), with
+/// [kDeletedUserDisplayName] as its display name.
+const kDeletedUserLogin = 'deleted_user';
+
+/// The display name of a line's sender who is not known any more: data, as
+/// the chat always had it (a reply to the line quotes it, and its mention
+/// too), shown in the language on screen ([IRCMessage.shownDisplayName]).
+/// No Twitch display name has a space: it is never a real account's.
+const kDeletedUserDisplayName = 'Deleted user';
 
 /// The object representation of a Twitch IRC message.
 class IRCMessage {
@@ -152,6 +165,20 @@ class IRCMessage {
     ].join(' ');
   }
 
+  /// Whether the line was built for a sender who is not known any more
+  /// ([kDeletedUserLogin] and [kDeletedUserDisplayName], with no user id):
+  /// its name is worded where it shows ([shownDisplayName]).
+  bool get isFromDeletedUser =>
+      user == kDeletedUserLogin &&
+      tags['display-name'] == kDeletedUserDisplayName &&
+      tags['user-id'] == null;
+
+  /// The sender's name as a viewer reads it, in [l]'s language: the display
+  /// name, or « Utilisateur supprimé » / "Deleted user" for a sender not
+  /// known any more ([isFromDeletedUser]).
+  String? shownDisplayName(AppLocalizations l) =>
+      isFromDeletedUser ? l.chatDeletedUser : tags['display-name'];
+
   /// Whether this message is a `USERNOTICE`, even after a deletion or a ban
   /// of its author has changed its [command] to [Command.clearMessage] or
   /// [Command.clearChat].
@@ -183,17 +210,26 @@ class IRCMessage {
 
   List<NoticeSegment>? _noticeText;
   String? _noticeTextChannel;
+  String? _noticeTextLanguage;
 
-  /// The notice's sentence, worded on first use and kept for as long as
-  /// [channelName] stays the same. [channelName] is the display name of the
-  /// channel a gift bomb is aimed at, which for a shared-chat partner is only
-  /// known once its profile has loaded.
-  List<NoticeSegment> noticeText({required String channelName}) {
+  /// The notice's sentence in [l]'s language (the one on screen by
+  /// default), worded on first use and kept for as long as [channelName]
+  /// and the language stay the same. [channelName] is the display name of
+  /// the channel a gift bomb is aimed at, which for a shared-chat partner is
+  /// only known once its profile has loaded.
+  List<NoticeSegment> noticeText({
+    required String channelName,
+    AppLocalizations? l,
+  }) {
     final notice = this.notice;
     if (notice == null) return const [];
-    if (_noticeText == null || _noticeTextChannel != channelName) {
-      _noticeText = userNoticeText(notice, channelName: channelName);
+    final words = l ?? L10n.current;
+    if (_noticeText == null ||
+        _noticeTextChannel != channelName ||
+        _noticeTextLanguage != words.localeName) {
+      _noticeText = userNoticeText(notice, channelName: channelName, l: words);
       _noticeTextChannel = channelName;
+      _noticeTextLanguage = words.localeName;
     }
     return _noticeText!;
   }
@@ -216,7 +252,12 @@ class IRCMessage {
   });
 
   /// Applies the given CLEARCHAT message to the provided messages and buffer.
-  static void clearChat({
+  ///
+  /// Returns whether a line of [messages] was marked in place (its command
+  /// or its timeout changed), which nothing observable reports: a cleared
+  /// chat goes through the list's own operations and returns false, as does
+  /// a timeout of someone with no line, or one repeated.
+  static bool clearChat({
     required List<IRCMessage> messages,
     required List<IRCMessage> bufferedMessages,
     required IRCMessage ircMessage,
@@ -226,17 +267,24 @@ class IRCMessage {
       messages.clear();
       bufferedMessages.clear();
       messages.add(
-        IRCMessage.createNotice(message: 'Chat was cleared by a moderator'),
+        IRCMessage.createNotice(message: L10n.current.chatClearedByModerator),
       );
-      return;
+      return false;
     }
 
     final bannedUser = ircMessage.message;
     final banDuration = ircMessage.tags['ban-duration'];
+    var marked = false;
 
     // Search the messages for the banned/timed-out user.
     messages.asMap().forEach((i, message) {
       if (message.user == bannedUser) {
+        if (message.command != Command.clearChat ||
+            (banDuration != null &&
+                message.tags['ban-duration'] != banDuration)) {
+          marked = true;
+        }
+
         // Mark the message for removal.
         messages[i].command = Command.clearChat;
 
@@ -259,19 +307,25 @@ class IRCMessage {
         }
       }
     });
+    return marked;
   }
 
   /// Applies the given CLEARMSG message to the provided messages and buffer.
-  static void clearMessage({
+  ///
+  /// Returns whether a line of [messages] was marked in place, which
+  /// nothing observable reports.
+  static bool clearMessage({
     required List<IRCMessage> messages,
     required List<IRCMessage> bufferedMessages,
     required IRCMessage ircMessage,
   }) {
     final targetId = ircMessage.tags['target-msg-id'];
+    var marked = false;
 
     // Search for the message associated with the ID and mark the message for deletion.
     for (var i = 0; i < messages.length; i++) {
       if (messages[i].tags['id'] == targetId) {
+        marked = messages[i].command != Command.clearMessage;
         messages[i].command = Command.clearMessage;
         break;
       }
@@ -284,6 +338,7 @@ class IRCMessage {
         break;
       }
     }
+    return marked;
   }
 
   /// Adds timestamp to the span if enabled
@@ -332,7 +387,7 @@ class IRCMessage {
         WidgetSpan(
           alignment: PlaceholderAlignment.middle,
           child: Tooltip(
-            message: 'Historical message',
+            message: context.l10n.chatHistoricalMessage,
             preferBelow: false,
             triggerMode: TooltipTriggerMode.tap,
             child: Icon(
@@ -358,8 +413,12 @@ class IRCMessage {
             triggerMode: TooltipTriggerMode.tap,
             preferBelow: false,
             message: isCurrentChannel
-                ? 'Sent from ${sourceChannelUser.displayName} (current channel)'
-                : 'Sent from ${sourceChannelUser.displayName}',
+                ? context.l10n.chatSentFromCurrent(
+                    name: sourceChannelUser.displayName,
+                  )
+                : context.l10n.chatSentFrom(
+                    name: sourceChannelUser.displayName,
+                  ),
             child: CachedNetworkImage(
               cacheManager: CustomCacheManager.instance,
               imageUrl: sourceChannelUser.profileImageUrl,
@@ -445,7 +504,11 @@ class IRCMessage {
             }
 
             final newBadge = ChatBadge(
-              name: skipBot ? 'Moderator (Bot)' : 'Moderator',
+              name: skipBot
+                  ? context.l10n.chatBadgeModeratorBot(
+                      moderator: badgeInfo.name,
+                    )
+                  : badgeInfo.name,
               url: badgeUrl,
               type: BadgeType.twitch,
             );
@@ -575,7 +638,9 @@ class IRCMessage {
     final displayName = tags['display-name']!;
     span.add(
       TextSpan(
-        text: user != null
+        text: isFromDeletedUser
+            ? shownDisplayName(context.l10n)
+            : user != null
             ? utils.getReadableName(displayName, user!)
             : displayName,
         style: TextStyle(color: color, fontWeight: FontWeight.bold),
@@ -610,7 +675,7 @@ class IRCMessage {
     if (!showMessage) {
       span.add(
         TextSpan(
-          text: ' <message deleted>',
+          text: ' ${context.l10n.chatMessageDeletedInline}',
           style: onTapDeletedMessage != null
               ? textStyle?.copyWith(
                   color: Theme.of(context).colorScheme.primary,
@@ -751,7 +816,7 @@ class IRCMessage {
             TextSpan(
               text: word,
               style: textStyle,
-              semanticsLabel: 'Filtered word',
+              semanticsLabel: context.l10n.chatFilteredWord,
               recognizer: onTapFiltered == null
                   ? null
                   : (TapGestureRecognizer()..onTap = onTapFiltered),
@@ -783,7 +848,10 @@ class IRCMessage {
             WidgetSpan(
               alignment: PlaceholderAlignment.middle,
               child: Semantics(
-                label: '${cheer.prefix} ${cheer.amount} bits',
+                label: context.l10n.chatCheerSemantics(
+                  prefix: cheer.prefix,
+                  count: cheer.amount,
+                ),
                 child: OnsetCachedNetworkImage(
                   imageUrl: cheer.tier.url(dark: dark, animated: animateEmotes),
                   height: emoteSize,
@@ -939,9 +1007,14 @@ class IRCMessage {
             url: emoteStack.last.url,
             title: nextWordIsEmoji
                 ? emoji
-                : '${emoteStack.last.name} (${emoteStack.last.type})',
+                : '${emoteStack.last.name} '
+                      '(${emoteStack.last.type.label(context.l10n)})',
             subtitle: Text(
-              'with ${nextWordIsEmoji ? message.join(' + ') : message.skip(1).join(' + ')}',
+              context.l10n.chatEmoteStackWith(
+                emotes: nextWordIsEmoji
+                    ? message.join(' + ')
+                    : message.skip(1).join(' + '),
+              ),
             ),
             launchExternal: launchExternal,
           ),
@@ -1122,7 +1195,7 @@ class IRCMessage {
           ),
           url: badge.url,
           title: badge.name,
-          subtitle: Text(badge.type.toString()),
+          subtitle: Text(badge.type.label(context.l10n)),
           launchExternal: launchExternal,
           showCopyName: false,
         ),
@@ -1220,13 +1293,19 @@ class IRCMessage {
             crossAxisAlignment: CrossAxisAlignment.start,
             spacing: 3,
             children: [
-              Text(emote.type.toString()),
+              Text(emote.type.label(context.l10n)),
               if (emote.ownerDisplayName != null && emote.ownerUsername != null)
                 Text(
-                  'by ${utils.getReadableName(emote.ownerDisplayName!, emote.ownerUsername!)}',
+                  context.l10n.chatEmoteBy(
+                    name: utils.getReadableName(
+                      emote.ownerDisplayName!,
+                      emote.ownerUsername!,
+                    ),
+                  ),
                   style: detail,
                 ),
-              if (emote.unlockHint case final hint?) Text(hint, style: detail),
+              if (emote.unlockHint(context.l10n) case final hint?)
+                Text(hint, style: detail),
             ],
           );
         },
@@ -1329,7 +1408,7 @@ class IRCMessage {
             if (showCopyName)
               SheetRow(
                 glyph: SheetGlyphKind.copy,
-                label: 'Copy name',
+                label: context.l10n.chatCopyName,
                 onTap: () {
                   // An emote's title is "name (real name)": only the name.
                   Clipboard.setData(
@@ -1341,7 +1420,7 @@ class IRCMessage {
               ),
             SheetRow(
               glyph: SheetGlyphKind.link,
-              label: 'Copy image URL',
+              label: context.l10n.chatCopyImageUrl,
               onTap: () {
                 Clipboard.setData(ClipboardData(text: url));
 
@@ -1350,7 +1429,7 @@ class IRCMessage {
             ),
             SheetRow(
               glyph: SheetGlyphKind.external,
-              label: 'Open in browser',
+              label: context.l10n.chatOpenInBrowser,
               onTap: () {
                 // Web links only, like every link the app opens.
                 unawaited(LinkRouter.open(url, launchExternal: launchExternal));
@@ -1613,7 +1692,7 @@ class IRCMessage {
     raw: '',
     tags: {'tmi-sent-ts': '${DateTime.now().millisecondsSinceEpoch}'},
     command: Command.notice,
-    message: "You followed ${arrival.fromName}'s raid",
+    message: L10n.current.chatRaidWelcomeFrom(name: arrival.fromName),
     raidArrival: arrival,
   );
 

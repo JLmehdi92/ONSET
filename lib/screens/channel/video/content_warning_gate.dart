@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:onset/apis/twitch_api.dart';
+import 'package:onset/l10n/l10n.dart';
 import 'package:onset/screens/channel/video/player_controller.dart';
 import 'package:onset/screens/channel/video/player_glyph.dart';
 import 'package:onset/theme.dart';
@@ -113,7 +114,8 @@ class _ContentWarningGateState extends State<ContentWarningGate> {
       final channel = await context.read<TwitchApi>().getChannel(
         userId: widget.userId,
       );
-      labels = contentLabelNames(channel.contentClassificationLabels);
+      // Ids: the warning names them in the language on screen.
+      labels = contentLabelIds(channel.contentClassificationLabels);
     } catch (_) {
       // Fail open: a channel we cannot read is not blocked.
     }
@@ -144,7 +146,7 @@ class _ContentWarningGateState extends State<ContentWarningGate> {
           Positioned.fill(
             child: ContentWarningCover(
               displayName: widget.displayName,
-              labels: _labels,
+              labels: contentLabelNames(_labels, context.l10n),
               onAccept: _accept,
             ),
           ),
@@ -179,6 +181,7 @@ class ContentWarningCover extends StatelessWidget {
     // Opaque: over a player it also swallows taps so the controls
     // underneath cannot be reached before accepting
     // (the ground, not a scrim, with the player paused behind it).
+    final l = context.l10n;
     return SizedBox.expand(
       child: ColoredBox(
         color: OnsetTokens.backgroundDark,
@@ -201,10 +204,10 @@ class ContentWarningCover extends StatelessWidget {
                       strokeWidth: 1.7,
                     ),
                     const SizedBox(height: 8),
-                    const Text(
-                      'Just one second…',
+                    Text(
+                      l.contentWarningTitle,
                       textAlign: TextAlign.center,
-                      style: TextStyle(
+                      style: const TextStyle(
                         fontSize: 16,
                         fontWeight: FontWeight.w700,
                         letterSpacing: -0.16,
@@ -214,9 +217,8 @@ class ContentWarningCover extends StatelessWidget {
                     const SizedBox(height: 4),
                     Text(
                       displayName.isEmpty
-                          ? 'This content is intended for certain audiences.'
-                          : "$displayName's content is intended for certain "
-                                'audiences.',
+                          ? l.contentWarningAudience
+                          : l.contentWarningAudienceOf(name: displayName),
                       textAlign: TextAlign.center,
                       style: const TextStyle(
                         fontSize: 12.5,
@@ -227,7 +229,7 @@ class ContentWarningCover extends StatelessWidget {
                     if (labels.isNotEmpty) ...[
                       const SizedBox(height: 2),
                       Text(
-                        'It may contain: ${labels.join(', ')}',
+                        l.contentWarningMayContain(labels: labels.join(', ')),
                         textAlign: TextAlign.center,
                         style: const TextStyle(
                           fontSize: 12,
@@ -257,7 +259,7 @@ class ContentWarningCover extends StatelessWidget {
                               fontWeight: FontWeight.w700,
                             ),
                           ),
-                          child: const Text('Start watching'),
+                          child: Text(l.contentWarningStart),
                         ),
                         OutlinedButton(
                           onPressed:
@@ -278,7 +280,7 @@ class ContentWarningCover extends StatelessWidget {
                               fontWeight: FontWeight.w600,
                             ),
                           ),
-                          child: const Text('Go back'),
+                          child: Text(l.contentWarningBack),
                         ),
                       ],
                     ),

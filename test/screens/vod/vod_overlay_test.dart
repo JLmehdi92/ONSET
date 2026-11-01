@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:onset/l10n/l10n.dart';
 import 'package:onset/models/vod.dart';
 import 'package:onset/screens/settings/stores/settings_store.dart';
 import 'package:onset/screens/vod/player_media.dart';
@@ -54,7 +55,7 @@ void main() {
             height: size.height,
             child: VodOverlay(
               controller: controller,
-              media: media ?? PlayerMedia.vod(_vod),
+              media: media ?? PlayerMedia.vod(_vod, L10n.english),
               settings: settings ?? SettingsStore.fromJson({}),
               skipButtons: skipButtons,
               looping: looping,
@@ -80,10 +81,14 @@ void main() {
   });
 
   test('playback rates read like the official app', () {
-    expect(formatPlaybackRate(1.25), '1.25×');
-    expect(formatPlaybackRate(1.5), '1.5×');
-    expect(formatPlaybackRate(2), '2×');
-    expect(formatPlaybackRate(0.75), '0.75×');
+    expect(formatPlaybackRate(1.25, L10n.english), '1.25×');
+    expect(formatPlaybackRate(1.5, L10n.english), '1.5×');
+    expect(formatPlaybackRate(2, L10n.english), '2×');
+    expect(formatPlaybackRate(0.75, L10n.english), '0.75×');
+    // French writes its decimal comma and a no-break space.
+    final french = lookupAppLocalizations(const Locale('fr'));
+    expect(formatPlaybackRate(1.25, french), '1,25\u00a0×');
+    expect(formatPlaybackRate(2, french), '2\u00a0×');
   });
 
   testWidgets('shows the title and the elapsed time', (tester) async {
@@ -97,8 +102,8 @@ void main() {
     await pump(tester);
 
     await tester.tap(find.byTooltip('Play'));
-    await tester.tap(find.byTooltip('Back 10 seconds'));
-    await tester.tap(find.byTooltip('Forward 10 seconds'));
+    await tester.tap(find.byTooltip('Rewind 10 seconds'));
+    await tester.tap(find.byTooltip('Skip ahead 10 seconds'));
 
     expect(controller.calls, ['togglePlay', 'seekBy -10', 'seekBy 10']);
   });
@@ -147,8 +152,8 @@ void main() {
       await pump(tester, media: clipMedia, skipButtons: false);
 
       expect(find.text('breakup advice'), findsOneWidget);
-      expect(find.byTooltip('Back 10 seconds'), findsNothing);
-      expect(find.byTooltip('Forward 10 seconds'), findsNothing);
+      expect(find.byTooltip('Rewind 10 seconds'), findsNothing);
+      expect(find.byTooltip('Skip ahead 10 seconds'), findsNothing);
 
       await tester.tapAt(const Offset(100, 450));
       await tester.pump(const Duration(milliseconds: 50));
@@ -358,7 +363,7 @@ void main() {
       await pump(
         tester,
         size: const Size(1280, 720),
-        media: PlayerMedia.vod(archive),
+        media: PlayerMedia.vod(archive, L10n.english),
       );
 
       expect(find.text('Past broadcast'), findsOneWidget);
@@ -372,13 +377,13 @@ void main() {
       await pump(
         tester,
         size: const Size(390, 219),
-        media: PlayerMedia.vod(archive),
+        media: PlayerMedia.vod(archive, L10n.english),
       );
 
       expect(tester.takeException(), isNull);
       expect(find.text('Past broadcast'), findsNothing);
       expect(tester.getSize(find.byTooltip('Play')).width, 56);
-      expect(tester.getSize(find.byTooltip('Back 10 seconds')).width, 44);
+      expect(tester.getSize(find.byTooltip('Rewind 10 seconds')).width, 44);
     });
 
     testWidgets('a short player shrinks the centre', (tester) async {

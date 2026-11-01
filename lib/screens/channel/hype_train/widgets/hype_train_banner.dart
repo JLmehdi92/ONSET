@@ -79,30 +79,27 @@ HtPalette htAnnouncementPalette(HtPalette palette, HtStep? step, int percent) {
 
 /// The resting subtitle: the record, the final level, the treasure or
 /// community unlock, or the default prompt.
-String htSubtitle(HypeTrainStore store, HypeTrainExecution train) {
+String htSubtitle(HypeTrainStore store, HypeTrainExecution train, HtCopy copy) {
   final shared = train.shared != null;
   switch (store.style) {
     case HtStyle.athApproaching:
-      return HtCopy.athApproaching;
+      return copy.athApproaching;
     case HtStyle.athReached:
-      return HtCopy.athReached(shared: shared);
+      return copy.athReached(shared: shared);
     case _:
   }
-  if (store.isFinalLevel) return HtCopy.finalLevel;
+  if (store.isFinalLevel) return copy.finalLevel;
   if (train.treasure case final treasure?) {
     return train.level >= treasure.threshold
-        ? HtCopy.treasureUnlockedSubtitle(treasure.discountPercentage)
-        : HtCopy.treasureLocked(
-            treasure.threshold,
-            treasure.discountPercentage,
-          );
+        ? copy.treasureUnlockedSubtitle(treasure.discountPercentage)
+        : copy.treasureLocked(treasure.threshold, treasure.discountPercentage);
   }
   if (train.community case final community?) {
     return train.level >= community.threshold
-        ? HtCopy.communityUnlockedSubtitle(community.current)
-        : HtCopy.communityLocked(community.threshold);
+        ? copy.communityUnlockedSubtitle(community.current)
+        : copy.communityLocked(community.threshold);
   }
-  return HtCopy.subtitle;
+  return copy.subtitle;
 }
 
 /// The running train, laid out like Twitch's default banner: the level's
@@ -193,6 +190,8 @@ class _HypeTrainBannerState extends State<HypeTrainBanner> {
                     store,
                     palette,
                     compact,
+                    HtCopy.of(context),
+                    height: height,
                     // An announced level change counts up on its own pill.
                     animatePill: resting && !store.reduceMotion,
                     pillColorDuration: morph,
@@ -249,9 +248,11 @@ class _HypeTrainBannerState extends State<HypeTrainBanner> {
               store: store,
               child: ClipRRect(
                 borderRadius: radius,
-                child: SizedBox(
+                // 74 dp (scaled with the text), taller when the subtitle
+                // needs its second line: nothing is cut off.
+                child: ConstrainedBox(
                   key: const ValueKey('ht-banner'),
-                  height: height,
+                  constraints: BoxConstraints(minHeight: height ?? 0),
                   child: HtFillScope(
                     fraction: _edge,
                     child: Stack(
@@ -381,19 +382,23 @@ class _HypeTrainBannerState extends State<HypeTrainBanner> {
 
 /// The resting content at the start of the banner: the level pill and the
 /// title over the subtitle (compact: the train's name as the subtitle).
+/// Its natural height: the banner is at least [height] (null: compact) and
+/// grows to fit it.
 Widget _restColumn(
   HypeTrainStore store,
   HtPalette palette,
-  bool compact, {
+  bool compact,
+  HtCopy copy, {
+  double? height,
   bool animatePill = true,
   Duration pillColorDuration = Duration.zero,
 }) {
   final train = store.train;
   if (train == null) return const SizedBox.shrink();
   if (store.style == HtStyle.athApproaching) {
-    return _athApproaching(palette, compact);
+    return _athApproaching(palette, compact, copy, height: height);
   }
-  final title = HtCopy.trainTitle(train.variant, shared: train.shared != null);
+  final title = copy.trainTitle(train.variant, shared: train.shared != null);
   final subtitle = Padding(
     padding: const EdgeInsetsDirectional.fromSTEB(
       HtDims.margin,
@@ -401,15 +406,17 @@ Widget _restColumn(
       HtDims.margin,
       HtDims.margin,
     ),
-    child: htSplit(
-      palette,
-      Text(
-        compact ? title : htSubtitle(store, train),
-        key: const ValueKey('ht-subtitle'),
-        maxLines: compact ? 1 : 2,
-        overflow: TextOverflow.ellipsis,
-        style: palette.textStyle(HtType.bodySmall),
-      ),
+    // Every word shows: the train's name in compact (one line, then a
+    // little smaller, then wrapped), the subtitle on two lines, then three
+    // (the banner grows), then a little smaller.
+    child: _FittedText(
+      compact ? title : htSubtitle(store, train, copy),
+      textKey: const ValueKey('ht-subtitle'),
+      palette: palette,
+      style: palette.textStyle(HtType.bodySmall),
+      lines: compact ? 1 : 2,
+      moreLines: compact ? 0 : 1,
+      lastLines: compact ? 2 : 4,
     ),
   );
   // Read here, in the banner's observer, not in the layout builder.
@@ -448,38 +455,135 @@ Widget _restColumn(
               if (!compact) ...[
                 const SizedBox(width: HtDims.margin),
                 Flexible(
-                  child: htSplit(
-                    palette,
-                    Text(
-                      title,
-                      key: const ValueKey('ht-title'),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: palette.textStyle(HtType.titleDefault),
-                    ),
+                  child: _FittedText(
+                    title,
+                    textKey: const ValueKey('ht-title'),
+                    palette: palette,
+                    style: palette.textStyle(HtType.titleDefault),
                   ),
                 ),
               ],
             ],
           ),
         );
+        // Centred in the banner's row; both lines of the subtitle shown.
         return Column(
-          mainAxisSize: compact ? MainAxisSize.min : MainAxisSize.max,
+          mainAxisSize: MainAxisSize.min,
           mainAxisAlignment: MainAxisAlignment.center,
           crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            top,
-            if (compact) subtitle else Flexible(child: subtitle),
-          ],
+          children: [top, subtitle],
         );
       },
     ),
   );
 }
 
-/// A record in sight: a large trophy (cropped by the banner) and the
-/// subtitle, no pill or title.
-Widget _athApproaching(HtPalette palette, bool compact) {
+/// A banner text that never loses a word to an ellipsis (the train's
+/// variant, « trésor », "Shared…", a subtitle's last words): on [lines]
+/// lines at its size when it fits, else on up to [lines] + [moreLines] (the
+/// banner grows), else a little smaller (down to [_minScale]) on that many,
+/// else at that size on up to [lastLines] (a long name at large text on a
+/// narrow phone), ending in an ellipsis only beyond them.
+class _FittedText extends StatelessWidget {
+  const _FittedText(
+    this.text, {
+    required this.textKey,
+    required this.palette,
+    required this.style,
+    this.lines = 1,
+    this.moreLines = 0,
+    this.lastLines = 3,
+    this.split = true,
+  });
+
+  final String text;
+  final Key textKey;
+
+  /// Whether it turns colour at the fill's edge ([htSplit]).
+  final bool split;
+  final HtPalette palette;
+  final TextStyle style;
+  final int lines;
+  final int moreLines;
+  final int lastLines;
+
+  static const _minScale = 0.8;
+  static const _scaleStep = 0.05;
+
+  @override
+  Widget build(BuildContext context) => LayoutBuilder(
+    builder: (context, constraints) {
+      final scaler = MediaQuery.textScalerOf(context);
+      final direction = Directionality.of(context);
+      final size = style.fontSize ?? 14;
+      var shownScaler = scaler;
+      int? shownLines = lines;
+      if (constraints.hasBoundedWidth) {
+        bool fits(TextScaler scaler, int maxLines) {
+          final painter = TextPainter(
+            text: TextSpan(text: text, style: style),
+            textDirection: direction,
+            textScaler: scaler,
+            maxLines: maxLines,
+          )..layout(maxWidth: constraints.maxWidth);
+          final fits = !painter.didExceedMaxLines;
+          painter.dispose();
+          return fits;
+        }
+
+        TextScaler scaled(double scale) =>
+            TextScaler.linear(scaler.scale(size) / size * scale);
+
+        final most = lines + moreLines;
+        shownLines = null;
+        for (var count = lines; count <= most; count++) {
+          if (fits(scaler, count)) {
+            shownLines = count;
+            break;
+          }
+        }
+        if (shownLines == null) {
+          // The style keeps its size, the text is scaled.
+          for (
+            var scale = 1 - _scaleStep;
+            scale >= _minScale - 0.001;
+            scale -= _scaleStep
+          ) {
+            if (fits(scaled(scale), most)) {
+              shownScaler = scaled(scale);
+              shownLines = most;
+              break;
+            }
+          }
+        }
+        // A long name at large text on a narrow phone: smaller and wrapped
+        // on more lines.
+        if (shownLines == null) {
+          shownScaler = scaled(_minScale);
+          shownLines = max(lastLines, most);
+        }
+      }
+      final shown = Text(
+        text,
+        key: textKey,
+        maxLines: shownLines,
+        overflow: TextOverflow.ellipsis,
+        style: style,
+        textScaler: shownScaler,
+      );
+      return split ? htSplit(palette, shown) : shown;
+    },
+  );
+}
+
+/// A record in sight: a large trophy (cropped by the banner, whose base
+/// [height] it fills) and the subtitle, no pill or title.
+Widget _athApproaching(
+  HtPalette palette,
+  bool compact,
+  HtCopy copy, {
+  double? height,
+}) {
   final trophy = Icon(
     Icons.emoji_events_rounded,
     key: const ValueKey('ht-ath-trophy'),
@@ -499,8 +603,11 @@ Widget _athApproaching(HtPalette palette, bool compact) {
             // Up to half a narrow banner; the 100 dp trophy is cropped.
             SizedBox(
               width: min(HtDims.trophy, constraints.maxWidth / 2),
+              height: height,
               child: ClipRect(
                 child: OverflowBox(
+                  minWidth: 0,
+                  minHeight: 0,
                   maxWidth: HtDims.trophy,
                   maxHeight: HtDims.trophy,
                   child: trophy,
@@ -510,12 +617,15 @@ Widget _athApproaching(HtPalette palette, bool compact) {
           Expanded(
             child: Padding(
               padding: const EdgeInsets.all(HtDims.margin),
-              child: Text(
-                compact ? HtCopy.athApproachingCompact : HtCopy.athApproaching,
-                key: const ValueKey('ht-subtitle'),
-                maxLines: compact ? 1 : 2,
-                overflow: TextOverflow.ellipsis,
+              child: _FittedText(
+                compact ? copy.athApproachingCompact : copy.athApproaching,
+                textKey: const ValueKey('ht-subtitle'),
+                palette: palette,
                 style: palette.textStyle(HtType.bodySmall),
+                lines: compact ? 1 : 2,
+                moreLines: compact ? 0 : 1,
+                lastLines: compact ? 2 : 4,
+                split: false,
               ),
             ),
           ),
@@ -549,7 +659,7 @@ class _Numbers extends StatelessWidget {
       ),
       ExcludeSemantics(
         child: Text(
-          HtCopy.percent(percent),
+          HtCopy.of(context).percent(percent),
           key: const ValueKey('ht-percent'),
           maxLines: 1,
           style: palette
@@ -575,10 +685,10 @@ class _BannerSemantics extends StatelessWidget {
     builder: (context) => Semantics(
       container: true,
       button: true,
-      label: store.semanticsSummary,
-      hint: HtCopy.detailsHint,
+      label: HtCopy.of(context).summaryLabel(store),
+      hint: HtCopy.of(context).detailsHint,
       customSemanticsActions: {
-        const CustomSemanticsAction(label: HtCopy.collapse): () =>
+        CustomSemanticsAction(label: HtCopy.of(context).collapse): () =>
             store.setCollapsed(true),
       },
       child: child,
@@ -607,17 +717,17 @@ class HypeTrainPill extends StatelessWidget {
               fraction: store.shownPercent / 100,
               fillColors: palette.pillFillColors,
               textOnFill: palette.textOnFill,
-              label: store.semanticsSummary,
-              hint: HtCopy.expand,
+              label: HtCopy.of(context).summaryLabel(store),
+              hint: HtCopy.of(context).expand,
               onTap: () => store.setCollapsed(false),
               child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   Icon(palette.icon),
                   const SizedBox(width: HtDims.marginHalf),
-                  Text(HtCopy.level(store.shownLevel)),
+                  Text(HtCopy.of(context).level(store.shownLevel)),
                   const SizedBox(width: HtDims.margin),
-                  Text(HtCopy.percent(store.shownPercent)),
+                  Text(HtCopy.of(context).percent(store.shownPercent)),
                   const Icon(Icons.expand_more_rounded),
                 ],
               ),
@@ -817,17 +927,17 @@ class HypeTrainStepContent extends StatelessWidget {
         final shared = train?.shared != null;
         final String text;
         if (data.containsKey('fromLevel')) {
-          text = HtCopy.merging;
+          text = HtCopy.of(context).merging;
         } else if (data.containsKey('treasure')) {
-          text = HtCopy.treasureUnlockedMarquee;
+          text = HtCopy.of(context).treasureUnlockedMarquee;
         } else if (data.containsKey('community')) {
-          text = HtCopy.communityUnlockedMarquee;
+          text = HtCopy.of(context).communityUnlockedMarquee;
         } else if (data.containsKey('level')) {
-          text = HtCopy.levelUp;
+          text = HtCopy.of(context).levelUp;
         } else if (store.phase == HtPhase.ending) {
-          text = HtCopy.completed(variant, shared: shared);
+          text = HtCopy.of(context).completed(variant, shared: shared);
         } else {
-          text = HtCopy.started(variant, shared: shared);
+          text = HtCopy.of(context).started(variant, shared: shared);
         }
         return ExcludeSemantics(
           child: HypeTrainMarquee(
@@ -844,7 +954,7 @@ class HypeTrainStepContent extends StatelessWidget {
       case HtStepKind.instruction:
         final key = data['text'] as String? ?? '';
         return _smallAnnouncement(
-          HtCopy.instruction(
+          HtCopy.of(context).instruction(
             key,
             data,
             variant: train?.variant ?? HtVariant.regular,
@@ -857,14 +967,18 @@ class HypeTrainStepContent extends StatelessWidget {
         );
       case HtStepKind.levelComplete:
         return _centred(
-          HtCopy.levelComplete(data['level'] as int? ?? store.shownLevel),
+          HtCopy.of(
+            context,
+          ).levelComplete(data['level'] as int? ?? store.shownLevel),
         );
       case HtStepKind.largeContribution:
         final event = data['event'];
         if (event is! HtProgressionEvent) return const SizedBox.shrink();
         final action = event.action;
         return _smallAnnouncement(
-          HtCopy.contribution(event.displayName, action, event.quantity),
+          HtCopy.of(
+            context,
+          ).contribution(event.displayName, action, event.quantity),
           icon: action.isCheer
               ? Icons.diamond_rounded
               : action.isGift
@@ -877,11 +991,13 @@ class HypeTrainStepContent extends StatelessWidget {
         if (totals is! ({int bits, int subs})) return const SizedBox.shrink();
         return _Totals(subs: totals.subs, bits: totals.bits, style: _small);
       case HtStepKind.summary:
-        final lines = HtCopy.summary(
-          data['level'] as int? ?? store.shownLevel,
-          ath: data['ath'] == true,
-          variant: train?.variant ?? HtVariant.regular,
-        ).split('\n');
+        final lines = HtCopy.of(context)
+            .summary(
+              data['level'] as int? ?? store.shownLevel,
+              ath: data['ath'] == true,
+              variant: train?.variant ?? HtVariant.regular,
+            )
+            .split('\n');
         return _smallAnnouncement(
           lines.first,
           secondary: lines.length > 1 ? lines.last : null,
@@ -900,7 +1016,7 @@ class HypeTrainStepContent extends StatelessWidget {
                   HypeTrainAvatarStack(users: users, plusColor: palette.text),
                   const SizedBox(width: HtDims.margin),
                   Text(
-                    HtCopy.sharedNew,
+                    HtCopy.of(context).sharedNew,
                     maxLines: 1,
                     style: palette.textStyle(HtType.titleDefault),
                   ),
@@ -936,7 +1052,7 @@ class HypeTrainStepContent extends StatelessWidget {
                 child: Center(
                   child: _live(
                     Text(
-                      HtCopy.treasureUnlockedMarquee,
+                      HtCopy.of(context).treasureUnlockedMarquee,
                       maxLines: 2,
                       overflow: TextOverflow.ellipsis,
                       textAlign: TextAlign.center,
@@ -963,7 +1079,7 @@ class HypeTrainStepContent extends StatelessWidget {
                 padding: const EdgeInsets.symmetric(horizontal: HtDims.margin),
                 child: _live(
                   Text(
-                    HtCopy.communityUnlockedMarquee,
+                    HtCopy.of(context).communityUnlockedMarquee,
                     maxLines: 2,
                     overflow: TextOverflow.ellipsis,
                     textAlign: TextAlign.center,
@@ -1010,7 +1126,7 @@ class HypeTrainStepContent extends StatelessWidget {
             emote: emote is HtReward ? emote : null,
             reduceMotion: store.reduceMotion,
           ),
-          HtCopy.completed(HtVariant.mythic),
+          HtCopy.of(context).completed(HtVariant.mythic),
         );
       case HtStepKind.athReached:
         return _effectRow(
@@ -1019,8 +1135,8 @@ class HypeTrainStepContent extends StatelessWidget {
             reduceMotion: store.reduceMotion,
           ),
           train?.shared != null
-              ? HtCopy.sharedRecordReached
-              : HtCopy.athReachedTitle,
+              ? HtCopy.of(context).sharedRecordReached
+              : HtCopy.of(context).athReachedTitle,
         );
       case HtStepKind.athOtherChannel:
         final channel = data['channel'];
@@ -1064,7 +1180,7 @@ class HypeTrainStepContent extends StatelessWidget {
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   Text(
-                    HtCopy.continuesIn(store.shownLevel),
+                    HtCopy.of(context).continuesIn(store.shownLevel),
                     maxLines: 1,
                     style: palette.textStyle(HtType.titleDefault),
                   ),
@@ -1108,15 +1224,16 @@ class _Totals extends StatelessWidget {
     );
     return Semantics(
       container: true,
-      label: '${HtCopy.subsTotal(subs)}, ${HtCopy.bitsTotal(bits)}',
+      label:
+          '${HtCopy.of(context).subsTotal(subs)}, ${HtCopy.of(context).bitsTotal(bits)}',
       excludeSemantics: true,
       child: Center(
         child: Column(
           key: const ValueKey('ht-small-announcement'),
           mainAxisSize: MainAxisSize.min,
           children: [
-            line(Icons.star_rounded, HtCopy.subsTotal(subs)),
-            line(Icons.diamond_rounded, HtCopy.bitsTotal(bits)),
+            line(Icons.star_rounded, HtCopy.of(context).subsTotal(subs)),
+            line(Icons.diamond_rounded, HtCopy.of(context).bitsTotal(bits)),
           ],
         ),
       ),
@@ -1151,7 +1268,7 @@ class HypeTrainContributions extends StatelessWidget {
               HtAvatar(user: channel.user, size: HtDims.avatar),
               const SizedBox(width: HtDims.marginHalf),
               Text(
-                HtCopy.percent(share),
+                HtCopy.of(context).percent(share),
                 maxLines: 1,
                 style: i == 0
                     ? HtType.titleLarge.copyWith(
@@ -1207,7 +1324,7 @@ class _OtherChannelRecord extends StatelessWidget {
     return Semantics(
       container: true,
       liveRegion: true,
-      label: HtCopy.otherChannelRecord(channel?.displayName ?? ''),
+      label: HtCopy.of(context).otherChannelRecord(channel?.displayName ?? ''),
       excludeSemantics: true,
       child: Stack(
         fit: StackFit.expand,
@@ -1250,7 +1367,9 @@ class _OtherChannelRecord extends StatelessWidget {
                 const SizedBox(width: HtDims.margin),
                 Flexible(
                   child: Text(
-                    HtCopy.otherChannelRecord(channel?.displayName ?? ''),
+                    HtCopy.of(
+                      context,
+                    ).otherChannelRecord(channel?.displayName ?? ''),
                     maxLines: 2,
                     overflow: TextOverflow.ellipsis,
                     style: style,
@@ -1286,8 +1405,8 @@ class _LeavingCollaborator extends StatelessWidget {
     return Semantics(
       container: true,
       label:
-          '${HtCopy.sharedLevelReached}. '
-          '${HtCopy.sharedLevel(level, percent)}',
+          '${HtCopy.of(context).sharedLevelReached}. '
+          '${HtCopy.of(context).sharedLevel(level, percent)}',
       excludeSemantics: true,
       child: Padding(
         padding: const EdgeInsetsDirectional.only(
@@ -1306,7 +1425,7 @@ class _LeavingCollaborator extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      HtCopy.sharedLevelReached,
+                      HtCopy.of(context).sharedLevelReached,
                       style: palette.textStyle(HtType.titleExtraSmall),
                     ),
                     if (channels.isNotEmpty) ...[
@@ -1320,7 +1439,7 @@ class _LeavingCollaborator extends StatelessWidget {
                 ),
                 const SizedBox(width: HtDims.margin),
                 Text(
-                  HtCopy.sharedLevel(level, percent),
+                  HtCopy.of(context).sharedLevel(level, percent),
                   style: palette.textStyle(HtType.titleDefault),
                 ),
               ],

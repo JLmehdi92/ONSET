@@ -3,6 +3,8 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_mobx/flutter_mobx.dart';
 import 'package:mobx/mobx.dart';
+import 'package:onset/l10n/enum_labels.dart';
+import 'package:onset/l10n/l10n.dart';
 import 'package:onset/screens/activity/stores/activity_store.dart';
 import 'package:onset/screens/home/stores/home_store.dart';
 import 'package:onset/screens/vod/vod_time.dart';
@@ -318,7 +320,7 @@ class _NotificationsListState extends State<_NotificationsList> {
               StateGlyph(StateGlyphKind.trash, color: colors.text, size: 18),
               const SizedBox(width: 10),
               Text(
-                'Remove notification',
+                context.l10n.activityRemove,
                 style: TextStyle(
                   fontSize: 14,
                   fontWeight: FontWeight.w600,
@@ -386,12 +388,10 @@ class _NotificationsListState extends State<_NotificationsList> {
                 top: padding.top + (tablet ? 72 : 96) - 24,
                 bottom: padding.bottom,
               ),
-              children: const [
+              children: [
                 FeedStatusView.empty(
-                  message: "Hooray! You're up to date",
-                  detail:
-                      'Check back soon for alerts about you and the '
-                      'broadcasters you follow.',
+                  message: context.l10n.activityEmpty,
+                  detail: context.l10n.activityEmptyDetail,
                   glyph: StateGlyphKind.bell,
                 ),
               ],
@@ -425,13 +425,13 @@ class _NotificationsListState extends State<_NotificationsList> {
             ),
           );
           children = [
-            card('Most Recent', first),
-            if (second.isNotEmpty) card('Earlier', second),
+            card(context.l10n.activityMostRecent, first),
+            if (second.isNotEmpty) card(context.l10n.activityEarlier, second),
           ];
         } else {
           children = [
             _SectionTitle(
-              title: 'Most Recent',
+              title: context.l10n.activityMostRecent,
               tablet: false,
               colors: colors,
               onMarkAll: unread > 0
@@ -440,13 +440,17 @@ class _NotificationsListState extends State<_NotificationsList> {
             ),
             ...first.map(row),
             if (second.isNotEmpty) ...[
-              _SectionTitle(title: 'Earlier', tablet: false, colors: colors),
+              _SectionTitle(
+                title: context.l10n.activityEarlier,
+                tablet: false,
+                colors: colors,
+              ),
               ...second.map(row),
             ],
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 18, 16, 8),
               child: Text(
-                'Notifications ONSET posted on this device.',
+                context.l10n.activityNote,
                 textAlign: TextAlign.center,
                 style: TextStyle(fontSize: 12, color: colors.tertiary),
               ),
@@ -511,26 +515,36 @@ class _SectionTitle extends StatelessWidget {
               ),
             ),
           ),
+          // Large text: the button takes up to two thirds and its label
+          // wraps, rather than pushing the row out of the screen.
           if (onMarkAll != null)
-            TextButton.icon(
-              onPressed: onMarkAll,
-              style: TextButton.styleFrom(
-                foregroundColor: colors.body,
-                minimumSize: const Size(0, 36),
-                padding: const EdgeInsets.symmetric(horizontal: 12),
-                shape: const StadiumBorder(),
-                textStyle: const TextStyle(
-                  fontSize: 13,
-                  fontWeight: FontWeight.w600,
+            Flexible(
+              flex: 2,
+              child: TextButton.icon(
+                onPressed: onMarkAll,
+                style: TextButton.styleFrom(
+                  foregroundColor: colors.body,
+                  minimumSize: const Size(0, 36),
+                  padding: const EdgeInsets.symmetric(horizontal: 12),
+                  shape: const StadiumBorder(),
+                  textStyle: const TextStyle(
+                    fontFamily: OnsetTokens.bodyFamily,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                icon: StateGlyph(
+                  StateGlyphKind.checkAll,
+                  color: colors.body,
+                  size: 16,
+                  strokeWidth: 2,
+                ),
+                label: Text(
+                  context.l10n.activityMarkAllRead,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
                 ),
               ),
-              icon: StateGlyph(
-                StateGlyphKind.checkAll,
-                color: colors.body,
-                size: 16,
-                strokeWidth: 2,
-              ),
-              label: const Text('Mark all as read'),
             ),
         ],
       ),
@@ -637,11 +651,12 @@ class _EntryRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final unread = !entry.read;
-    final when = formatTimeAgo(entry.at, now: now);
+    final l = context.l10n;
+    final when = formatTimeAgo(entry.at, l, now: now);
     final rim = tablet ? colors.card : colors.ground;
     return Semantics(
       button: true,
-      onLongPressHint: 'Options',
+      onLongPressHint: l.activityOptions,
       child: PressScale(
         child: Material(
           type: MaterialType.transparency,
@@ -672,7 +687,7 @@ class _EntryRow extends StatelessWidget {
                         spacing: 3,
                         children: [
                           Text(
-                            entry.title,
+                            entry.titleIn(context.l10n),
                             maxLines: 2,
                             overflow: TextOverflow.ellipsis,
                             style: TextStyle(
@@ -685,9 +700,10 @@ class _EntryRow extends StatelessWidget {
                               color: unread ? colors.text : colors.secondary,
                             ),
                           ),
-                          if (entry.body.isNotEmpty)
+                          if (entry.bodyIn(context.l10n) case final body
+                              when body.isNotEmpty)
                             Text(
-                              entry.body,
+                              body,
                               maxLines: 2,
                               overflow: TextOverflow.ellipsis,
                               style: TextStyle(
@@ -699,7 +715,7 @@ class _EntryRow extends StatelessWidget {
                           Padding(
                             padding: const EdgeInsets.only(top: 1),
                             child: Text(
-                              '$when • ${entry.kind.label}',
+                              '$when • ${entry.kind.label(l)}',
                               style: TextStyle(
                                 fontSize: 12,
                                 color: colors.tertiary,
@@ -785,7 +801,7 @@ class _EntryAvatar extends StatelessWidget {
               left: -2,
               top: -2,
               child: Semantics(
-                label: 'Unread',
+                label: context.l10n.activityUnread,
                 child: Container(
                   key: const ValueKey('activity-unread-dot'),
                   width: 13,
@@ -863,7 +879,7 @@ class _RemoveSheet extends StatelessWidget {
                   ],
                   Expanded(
                     child: Text(
-                      entry.title,
+                      entry.titleIn(context.l10n),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(fontSize: 13, color: colors.secondary),
@@ -875,7 +891,7 @@ class _RemoveSheet extends StatelessWidget {
             const SizedBox(height: 4),
             SheetRow(
               glyph: SheetGlyphKind.trash,
-              label: 'Remove notification',
+              label: context.l10n.activityRemove,
               onTap: () => Navigator.pop(context, true),
             ),
           ],
@@ -918,7 +934,7 @@ class _TabletActivity extends StatelessWidget {
                 Semantics(
                   header: true,
                   child: Text(
-                    'Activity',
+                    context.l10n.activityTitle,
                     style: TextStyle(
                       fontSize: 30,
                       fontWeight: FontWeight.w800,
@@ -928,7 +944,7 @@ class _TabletActivity extends StatelessWidget {
                   ),
                 ),
                 Text(
-                  'Notifications ONSET posted on this device.',
+                  context.l10n.activityNote,
                   style: TextStyle(fontSize: 13, color: colors.tertiary),
                 ),
               ],
@@ -1038,7 +1054,11 @@ class _MarkAllPill extends StatelessWidget {
             width: OnsetTokens.hairlineWidth,
           ),
           shape: const StadiumBorder(),
-          textStyle: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+          textStyle: const TextStyle(
+            fontFamily: OnsetTokens.bodyFamily,
+            fontSize: 14,
+            fontWeight: FontWeight.w600,
+          ),
         ),
         child: Row(
           mainAxisSize: MainAxisSize.min,
@@ -1050,7 +1070,7 @@ class _MarkAllPill extends StatelessWidget {
               size: 17,
               strokeWidth: 2,
             ),
-            const Text('Mark all as read'),
+            Text(context.l10n.activityMarkAllRead),
             WhisperCountPill(count: count),
           ],
         ),
@@ -1090,27 +1110,37 @@ class _WhispersColumn extends StatelessWidget {
                 padding: const EdgeInsets.fromLTRB(18, 16, 12, 8),
                 child: Row(
                   children: [
-                    Flexible(
-                      child: Semantics(
-                        header: true,
-                        child: Text(
-                          'Whispers',
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                            fontSize: 17,
-                            fontWeight: FontWeight.w700,
-                            letterSpacing: -0.25,
-                            color: colors.text,
+                    // The title and its count take what "See all" leaves
+                    // (a Spacer would hold half of it back).
+                    Expanded(
+                      child: Row(
+                        children: [
+                          // Smaller rather than cut at large text.
+                          Flexible(
+                            child: Semantics(
+                              header: true,
+                              child: FittedBox(
+                                fit: BoxFit.scaleDown,
+                                child: Text(
+                                  context.l10n.whispersTitle,
+                                  maxLines: 1,
+                                  style: TextStyle(
+                                    fontSize: 17,
+                                    fontWeight: FontWeight.w700,
+                                    letterSpacing: -0.25,
+                                    color: colors.text,
+                                  ),
+                                ),
+                              ),
+                            ),
                           ),
-                        ),
+                          if (unread > 0) ...[
+                            const SizedBox(width: 8),
+                            WhisperCountPill(count: unread, size: 18),
+                          ],
+                        ],
                       ),
                     ),
-                    if (unread > 0) ...[
-                      const SizedBox(width: 8),
-                      WhisperCountPill(count: unread, size: 18),
-                    ],
-                    const Spacer(),
                     TextButton(
                       onPressed: () => WhispersScreen.open(context, store),
                       style: TextButton.styleFrom(
@@ -1119,6 +1149,7 @@ class _WhispersColumn extends StatelessWidget {
                         padding: const EdgeInsets.only(left: 12, right: 8),
                         shape: const StadiumBorder(),
                         textStyle: const TextStyle(
+                          fontFamily: OnsetTokens.bodyFamily,
                           fontSize: 13,
                           fontWeight: FontWeight.w600,
                         ),
@@ -1127,7 +1158,7 @@ class _WhispersColumn extends StatelessWidget {
                         mainAxisSize: MainAxisSize.min,
                         spacing: 4,
                         children: [
-                          const Text('See all'),
+                          Text(context.l10n.commonSeeAll),
                           StateGlyph(
                             StateGlyphKind.chevronRight,
                             color: colors.body,
@@ -1149,8 +1180,7 @@ class _WhispersColumn extends StatelessWidget {
                     ? Padding(
                         padding: const EdgeInsets.fromLTRB(18, 8, 18, 18),
                         child: Text(
-                          'No whispers yet. Whispers you get while the app '
-                          'is open show up here.',
+                          context.l10n.activityNoWhispers,
                           style: TextStyle(
                             fontSize: 13,
                             height: 1.45,

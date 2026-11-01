@@ -1,9 +1,12 @@
+import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mocktail/mocktail.dart';
 import 'package:onset/apis/base_api_client.dart';
 import 'package:onset/apis/twitch_api.dart';
+import 'package:onset/l10n/l10n.dart';
 import 'package:onset/models/stream.dart';
 import 'package:onset/services/go_live/go_live.dart';
+import 'package:onset/services/go_live/go_live_worker.dart';
 import 'package:onset/services/notifications/activity_log.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -405,6 +408,49 @@ void main() {
       expect(prefs.problem, isNull);
     });
 
+    test(
+      'with the app in French, the background run posts French notices',
+      () async {
+        SharedPreferences.setMockInitialValues({
+          // French picked in the app, on an English device.
+          'settings': '{"appLanguage":"fr"}',
+          kUiLanguagePrefsKey: 'fr',
+          'go_live_enabled': true,
+          'go_live_user_id': '7',
+          'go_live_seen': <String>[],
+        });
+        addTearDown(() => L10n.use(const Locale('en')));
+        final store = await SharedPreferences.getInstance();
+        // As the isolate does before its first notice.
+        final l = await useBackgroundLanguage(store, const [Locale('en')]);
+        when(() => api.getFollowedStreams(id: '7', first: 100)).thenAnswer(
+          (_) async =>
+              StreamsTwitch([_stream('9', title: 'Speedrun')], const {}),
+        );
+        final posted = <GoLiveNotice>[];
+        expect(
+          await runGoLiveTask(
+            readToken: () async => 'token',
+            buildApi: (_) => api,
+            prefs: GoLivePrefs(store),
+            notify: (notices, _) async => posted.addAll(notices),
+            notifyProblem: (_) async {},
+            report: (error, _) => reported.add(error),
+            now: () => now,
+          ),
+          isTrue,
+        );
+        expect(posted.single.title, 'User9 est en direct');
+        expect(posted.single.body, 'Game · Speedrun');
+        // The paused notice too.
+        expect(l.notifGoLivePaused, 'Notifications de live en pause');
+        expect(
+          l.goLiveLogInAgain,
+          'Reconnectez-vous pour recevoir les notifications de live.',
+        );
+      },
+    );
+
     test('done without asking right after the app checked', () async {
       await prefs.setProblem(kGoLiveLoggedOut);
       await prefs.setCheckedAt(
@@ -453,6 +499,21 @@ void main() {
       answer(const NetworkException('offline'));
       expect(await run(), isFalse);
       expect(reported, isEmpty);
+    });
+
+    test('a connection dropped midway: retried later and reported, as it '
+        'always was', () async {
+      // Read by a screen as a network error, but not a NetworkException.
+      answer(
+        const ApiException(
+          'Connection reset by peer',
+          null,
+          null,
+          ApiErrorKind.network,
+        ),
+      );
+      expect(await run(), isFalse);
+      expect(reported.single, isA<ApiException>());
     });
 
     test('anything else: retried later and reported', () async {

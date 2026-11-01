@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mocktail/mocktail.dart';
 import 'package:onset/apis/twitch_api.dart';
+import 'package:onset/l10n/l10n.dart';
 import 'package:onset/screens/channel/stores/create_clip_store.dart';
 import 'package:onset/screens/channel/video/create_clip_sheet.dart';
 
@@ -58,22 +59,22 @@ void main() {
     tester,
   ) async {
     final store = await pump(tester);
-    expect(find.text('Create Clip'), findsOneWidget);
+    expect(find.text('Create clip'), findsOneWidget);
 
     store.start();
     await tester.pump();
-    expect(find.text('Rendering Clip'), findsOneWidget);
+    expect(find.text('Rendering clip…'), findsOneWidget);
 
     await tester.pump(const Duration(seconds: 1));
     await tester.pump();
     // The work cross-fades into the finished clip.
     await tester.pump(const Duration(milliseconds: 400));
 
-    expect(find.text('Rendering Clip'), findsNothing);
+    expect(find.text('Rendering clip…'), findsNothing);
     await tester.tap(find.text('Edit'));
     expect(edited, [Uri.parse('https://www.twitch.tv/streamer/clip/Slug-abc')]);
 
-    await tester.tap(find.text('Share Clip'));
+    await tester.tap(find.text('Share clip'));
     expect(actions, ['share https://clips.twitch.tv/Slug-abc']);
 
     String? copied;
@@ -135,7 +136,7 @@ void main() {
     expect(find.textContaining('live'), findsOneWidget);
     await tester.tap(find.text('Retry'));
     await tester.pump();
-    expect(find.text('Rendering Clip'), findsOneWidget);
+    expect(find.text('Rendering clip…'), findsOneWidget);
     await tester.pump(const Duration(seconds: 1));
     await tester.pump();
     expect(find.text('Copy link'), findsOneWidget);
@@ -145,14 +146,14 @@ void main() {
   test('each refusal has its own wording', () {
     final messages = {
       for (final failure in ClipCreateFailure.values)
-        failure: clipFailureMessage(failure),
+        failure: clipFailureMessage(failure, L10n.english),
     };
     expect(messages.values.toSet(), hasLength(messages.length));
     expect(
       messages[ClipCreateFailure.notClippable],
-      'This channel does not permit clips of this category.',
+      'This channel doesn’t allow clips of this category.',
     );
-    expect(messages[ClipCreateFailure.unknown], 'Hmm... Something went wrong');
+    expect(messages[ClipCreateFailure.unknown], 'Hmm… something went wrong.');
   });
 
   test('the live frame is only asked for a Twitch login', () {
@@ -192,7 +193,7 @@ void main() {
     );
     store.start();
     await tester.pump();
-    expect(find.text('Rendering Clip'), findsOneWidget);
+    expect(find.text('Rendering clip…'), findsOneWidget);
     expect(find.byType(LinearProgressIndicator), findsOneWidget);
 
     await tester.pump(const Duration(seconds: 1));

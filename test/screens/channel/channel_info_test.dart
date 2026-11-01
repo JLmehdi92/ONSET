@@ -3,6 +3,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:mobx/mobx.dart' show Observable, runInAction;
 import 'package:mocktail/mocktail.dart';
 import 'package:onset/apis/twitch_api.dart';
+import 'package:onset/l10n/l10n.dart';
 import 'package:onset/models/stream.dart';
 import 'package:onset/models/user.dart';
 import 'package:onset/screens/channel/channel_info.dart';
@@ -13,6 +14,7 @@ import 'package:onset/widgets/motion/motion.dart';
 import 'package:provider/provider.dart';
 
 import '../../helpers/fake_player.dart';
+import '../../helpers/l10n.dart' show loadInter;
 
 class MockTwitchApi extends Mock implements TwitchApi {}
 
@@ -61,10 +63,16 @@ void main() {
       tester.pumpWidget(const SizedBox.shrink());
 
   test('shortUptime reads short', () {
-    expect(shortUptime(const Duration(hours: 3, minutes: 12)), '3 h 12');
-    expect(shortUptime(const Duration(hours: 1, minutes: 5)), '1 h 05');
-    expect(shortUptime(const Duration(minutes: 45)), '45 min');
-    expect(shortUptime(const Duration(minutes: -3)), '0 min');
+    expect(
+      shortUptime(const Duration(hours: 3, minutes: 12), L10n.english),
+      '3h 12m',
+    );
+    expect(
+      shortUptime(const Duration(hours: 1, minutes: 5), L10n.english),
+      '1h 05m',
+    );
+    expect(shortUptime(const Duration(minutes: 45), L10n.english), '45m');
+    expect(shortUptime(const Duration(minutes: -3), L10n.english), '0m');
   });
 
   group('ChannelInfoRow', () {
@@ -88,9 +96,11 @@ void main() {
     );
 
     testWidgets('the channel, what it streams, and Follow', (tester) async {
+      // The app's font, so the line is measured as on a device.
+      await tester.runAsync(loadInter);
       var opened = 0;
       for (final dark in [true, false]) {
-        for (final width in [390.0, 320.0]) {
+        for (final width in [390.0, 360.0, 320.0]) {
           await pump(
             tester,
             row(
@@ -103,7 +113,19 @@ void main() {
           expect(tester.takeException(), isNull);
           expect(find.text('Streamer'), findsOneWidget);
           expect(find.text('Dota 2'), findsOneWidget);
-          expect(find.text(' · 2,445 watching · 3 h 12'), findsOneWidget);
+          // Read in full (a narrow row shows it shorter, never cut).
+          expect(
+            find.byWidgetPredicate(
+              (w) =>
+                  w is Semantics &&
+                  w.properties.label == ' · 2,445 watching · 3h 12m',
+            ),
+            findsOneWidget,
+          );
+          // Beside a short category the line shows in full on a phone.
+          if (width >= 360) {
+            expect(find.text(' · 2,445 watching · 3h 12m'), findsOneWidget);
+          }
           expect(find.text('Follow'), findsOneWidget);
         }
       }
@@ -321,7 +343,7 @@ void main() {
         expect(find.text('ON TEST DOTA 2 AVEC @befreesh'), findsOneWidget);
         expect(find.text('Dota 2'), findsOneWidget);
         expect(find.text('FR'), findsOneWidget);
-        expect(find.text('Watch streak 12'), findsOneWidget);
+        expect(find.text('Watch Streak 12'), findsOneWidget);
         expect(find.text('Follow'), findsOneWidget);
         expect(find.text('Subscribe'), findsOneWidget);
         // Subscribe and the watch streak stay hype green in both themes
@@ -336,10 +358,10 @@ void main() {
         );
         expect(subscribe.style!.foregroundColor!.resolve({}), green);
         expect(
-          tester.widget<Text>(find.text('Watch streak 12')).style?.color,
+          tester.widget<Text>(find.text('Watch Streak 12')).style?.color,
           green,
         );
-        expect(find.text('ALSO LIVE FROM YOUR FOLLOWS'), findsOneWidget);
+        expect(find.text('ALSO LIVE FROM CHANNELS YOU FOLLOW'), findsOneWidget);
         info.alsoLive.value = const <StreamTwitch>[];
       }
       info.alsoLive.value = [other];

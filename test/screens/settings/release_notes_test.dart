@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:onset/l10n/l10n.dart';
 import 'package:onset/screens/settings/widgets/release_notes.dart';
 
 void main() {
@@ -157,18 +158,19 @@ A big update.
     });
   });
 
-  test('the bundled release notes hold the 1.0.0 entry', () {
+  test('the bundled release notes hold the 1.1.0 and 1.0.0 entries', () {
     final bundled = File('assets/release-notes.md').readAsStringSync();
     // The comment for writers stays first.
     expect(bundled.trimLeft(), startsWith('<!--'));
     final entries = parseReleaseEntries(bundled).entries;
-    expect(entries, hasLength(1));
-    final entry = entries.single;
+    expect(entries, hasLength(2));
+    expect(entries.first.version, '1.1.0');
+    final entry = entries.last;
     expect(entry.version, '1.0.0');
     expect(entry.label, 'v1.0.0');
     expect(entry.date, matches(RegExp(r'^[A-Z][a-z]+ \d{1,2}, \d{4}$')));
     expect(entry.sections, isNotEmpty);
-    expect(entry.summary, isNotEmpty);
+    expect(entry.summary(L10n.english), isNotEmpty);
     // Never on a first launch, whatever the notes say.
     expect(
       shouldShowReleaseNotes(lastShown: null, current: '1.0.0', notes: bundled),
@@ -190,11 +192,11 @@ A big update.
     final data = await rootBundle.load('assets/release-notes.md');
     expect(data.lengthInBytes, greaterThan(0));
     final text = await rootBundle.loadString('assets/release-notes.md');
-    expect(parseReleaseEntries(text).entries, hasLength(1));
+    expect(parseReleaseEntries(text).entries, hasLength(2));
     expect(await ReleaseNotes.read(), text);
     expect(
       parseReleaseEntries(await ReleaseNotes.load()).entries,
-      hasLength(1),
+      hasLength(2),
     );
   });
 
@@ -278,13 +280,13 @@ What changed.
         ],
       );
       expect(latest.sections.first.items, hasLength(3));
-      expect(latest.summary, '2 new · 1 fix · 2 changes');
+      expect(latest.summary(L10n.english), '2 new · 1 fix · 2 changes');
 
       final first = data.entries.last;
       expect((first.version, first.date), ('1.0.0', null));
       expect(first.sections.single.title, isNull);
       expect(first.sections.single.items.last, isA<ReleaseParagraph>());
-      expect(first.summary, '1 change');
+      expect(first.summary(L10n.english), '1 change');
     });
 
     test('section names decide the kind, whatever their case', () {
@@ -301,6 +303,20 @@ What changed.
       expect(kind('Bugfixes'), ReleaseSectionKind.fixed);
       expect(kind('Fixes for the new player'), ReleaseSectionKind.fixed);
       expect(kind('Breaking changes'), ReleaseSectionKind.other);
+      // Every form of the word, as a whole word.
+      for (final fix in const [
+        'Fix',
+        'Fixed',
+        'Fixing',
+        'Fixups',
+        'Hotfix',
+        'Corrections',
+        'Small fixups',
+      ]) {
+        expect(kind(fix), ReleaseSectionKind.fixed, reason: fix);
+      }
+      expect(kind('Prefixes'), ReleaseSectionKind.other);
+      expect(kind('Fixtures'), ReleaseSectionKind.other);
     });
 
     test('counts read one and many', () {
@@ -321,7 +337,7 @@ What changed.
 - d
 - e
 ''').entries.single;
-      expect(entry.summary, '1 new · 2 improvements · 2 fixes');
+      expect(entry.summary(L10n.english), '1 new · 2 improvements · 2 fixes');
     });
 
     test('nothing to read: no entries', () {

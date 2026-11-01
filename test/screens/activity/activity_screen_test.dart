@@ -4,16 +4,20 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mocktail/mocktail.dart';
 import 'package:onset/apis/twitch_api.dart';
+import 'package:onset/l10n/l10n.dart';
 import 'package:onset/screens/activity/activity_screen.dart';
 import 'package:onset/screens/activity/stores/activity_store.dart';
 import 'package:onset/screens/home/stores/home_store.dart';
 import 'package:onset/screens/whispers/whisper_conversation.dart';
 import 'package:onset/screens/whispers/whispers_screen.dart';
 import 'package:onset/services/notifications/activity_log.dart';
+import 'package:onset/services/notifications/schedule_reminders.dart';
 import 'package:onset/services/realtime/twitch_eventsub_client.dart';
 import 'package:onset/stores/whisper_store.dart';
 import 'package:onset/theme.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+
+import '../../helpers/l10n.dart';
 
 class MockTwitchApi extends Mock implements TwitchApi {}
 
@@ -57,22 +61,31 @@ void main() {
     Size size = _phone,
     ThemeMode theme = ThemeMode.dark,
     bool reduceMotion = false,
+    Locale? locale,
+    double textScale = 1,
   }) async {
     tester.view.physicalSize = size;
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.reset);
+    final app = await localizedApp(
+      tester,
+      locale: locale,
+      textScale: textScale,
+      builder: (context, child) => MediaQuery(
+        data: MediaQuery.of(context).copyWith(disableAnimations: reduceMotion),
+        child: child!,
+      ),
+    );
     final themes = OnsetThemes(colorSchemeSeed: OnsetTokens.accent);
     await tester.pumpWidget(
       MaterialApp(
+        locale: app.locale,
+        supportedLocales: app.supportedLocales,
+        localizationsDelegates: app.delegates,
         theme: themes.light,
         darkTheme: themes.dark,
         themeMode: theme,
-        builder: (context, child) => MediaQuery(
-          data: MediaQuery.of(
-            context,
-          ).copyWith(disableAnimations: reduceMotion),
-          child: child!,
-        ),
+        builder: app.builder,
         home: Scaffold(
           body: ActivityScreen(
             store: store,
@@ -110,7 +123,7 @@ void main() {
 
   testWidgets("empty: Twitch's up-to-date message", (tester) async {
     await pump(tester);
-    expect(find.text("Hooray! You're up to date"), findsOneWidget);
+    expect(find.text('Hooray! You’re up to date'), findsOneWidget);
     expect(
       find.text(
         'Check back soon for alerts about you and the broadcasters you '
@@ -162,19 +175,19 @@ void main() {
       ),
     ]);
     await pump(tester);
-    expect(find.text('Most Recent'), findsOneWidget);
+    expect(find.text('Most recent'), findsOneWidget);
     expect(find.text('Earlier'), findsOneWidget);
     expect(find.text('Title a'), findsOneWidget);
     expect(find.text('Body a'), findsOneWidget);
     expect(find.text('1 hour ago • Live'), findsOneWidget);
-    expect(find.text('3 days ago • Chat Mentions'), findsOneWidget);
+    expect(find.text('3 days ago • Chat mentions'), findsOneWidget);
     expect(find.textContaining('on this device'), findsOneWidget);
   });
 
   testWidgets('only older ones: they are the most recent', (tester) async {
     await store.addAll([_entry('a', ago: const Duration(days: 2))]);
     await pump(tester);
-    expect(find.text('Most Recent'), findsOneWidget);
+    expect(find.text('Most recent'), findsOneWidget);
     expect(find.text('Earlier'), findsNothing);
   });
 
@@ -403,7 +416,7 @@ void main() {
         size: _tablet,
       );
       expect(find.text('Activity'), findsOneWidget);
-      expect(find.text('Most Recent'), findsOneWidget);
+      expect(find.text('Most recent'), findsOneWidget);
       expect(find.text('Earlier'), findsOneWidget);
       expect(find.text('Title a'), findsOneWidget);
       expect(find.text('Whispers'), findsOneWidget);
@@ -454,7 +467,7 @@ void main() {
 
     testWidgets("empty: Twitch's up-to-date message", (tester) async {
       await pump(tester, size: _tabletPortrait);
-      expect(find.text("Hooray! You're up to date"), findsOneWidget);
+      expect(find.text('Hooray! You’re up to date'), findsOneWidget);
     });
   });
 
@@ -493,4 +506,112 @@ void main() {
       });
     }
   }
+
+  group('in French', () {
+    final french = lookupAppLocalizations(fr);
+
+    for (final (sizeName, size) in frenchScreenSizes) {
+      for (final scale in frenchTextScales) {
+        testWidgets('empty, then notifications, $sizeName, text ×$scale', (
+          tester,
+        ) async {
+          await pump(tester, size: size, locale: fr, textScale: scale);
+          expect(find.text(french.activityEmpty), findsOneWidget);
+          await expectFrenchThroughout(tester, 'empty');
+
+          // The titles and bodies are what the notification said (written
+          // when it was posted): Twitch names here.
+          await store.addAll([
+            for (final (id, ago, kind) in [
+              ('1', const Duration(minutes: 5), ActivityKind.live),
+              ('2', const Duration(hours: 3), ActivityKind.mention),
+              ('3', const Duration(days: 9), ActivityKind.reminder),
+            ])
+              ActivityEntry(
+                id: id,
+                kind: kind,
+                title: 'Streamer$id',
+                body: 'Chess',
+                login: 'streamer',
+                at: _now.subtract(ago),
+                read: id == '3',
+              ),
+          ]);
+          await pump(tester, size: size, locale: fr, textScale: scale);
+          expect(
+            find.textContaining(french.activityKindMention),
+            findsOneWidget,
+          );
+          await expectFrenchThroughout(tester, 'notifications');
+        });
+      }
+    }
+
+    for (final (sizeName, size) in frenchScreenSizes) {
+      for (final scale in frenchTextScales) {
+        testWidgets('notices posted in English read in French, $sizeName, '
+            'text ×$scale', (tester) async {
+          final english = lookupAppLocalizations(en);
+          final reminder = ScheduleReminder(
+            segmentId: 's1',
+            login: 'streamer',
+            channelName: 'Streamer',
+            startAt: _now.subtract(const Duration(days: 2)),
+            title: 'Tournoi',
+            category: 'Échecs',
+          ).entryIn(english);
+          await store.addAll([
+            ActivityEntry(
+              id: 'live',
+              kind: ActivityKind.live,
+              title: english.notifGoLiveTitle(name: 'Streamer'),
+              body: 'Partie classée · Échecs',
+              login: 'streamer',
+              at: _now.subtract(const Duration(minutes: 5)),
+              params: const {
+                'name': 'Streamer',
+                'title': 'Partie classée',
+                'category': 'Échecs',
+              },
+            ),
+            ActivityEntry(
+              id: 'mention',
+              kind: ActivityKind.mention,
+              title: english.notifMentionTitle(
+                sender: 'Ami',
+                channel: 'Streamer',
+              ),
+              body: 'salut @viewer',
+              login: 'streamer',
+              at: _now.subtract(const Duration(hours: 3)),
+              params: const {'sender': 'Ami', 'channel': 'Streamer'},
+            ),
+            reminder,
+            // Kept by an older version: its words as they were.
+            ActivityEntry(
+              id: 'old',
+              kind: ActivityKind.live,
+              title: 'Oldie is live',
+              body: '',
+              login: 'oldie',
+              at: _now.subtract(const Duration(days: 20)),
+            ),
+          ]);
+          await pump(tester, size: size, locale: fr, textScale: scale);
+          await expectFrenchThroughout(
+            tester,
+            'reworded notices',
+            content: const ['Oldie is live'],
+          );
+          expect(find.text('Streamer est en direct'), findsWidgets);
+          expect(find.text('Échecs · Partie classée'), findsWidgets);
+          expect(
+            find.text('Ami vous mentionne dans le chat de la chaîne Streamer'),
+            findsWidgets,
+          );
+          expect(find.text('Oldie is live'), findsWidgets);
+        });
+      }
+    }
+  });
 }

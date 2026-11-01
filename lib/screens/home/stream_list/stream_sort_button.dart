@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_mobx/flutter_mobx.dart';
 import 'package:onset/apis/twitch_directory_service.dart';
+import 'package:onset/l10n/enum_labels.dart';
+import 'package:onset/l10n/l10n.dart';
 import 'package:onset/screens/home/stream_list/stream_card_parts.dart';
 import 'package:onset/screens/settings/stores/settings_store.dart';
 import 'package:onset/theme.dart';
@@ -22,8 +24,9 @@ class StreamSortButton extends StatelessWidget {
   Widget build(BuildContext context) {
     final colors = FeedColors.of(context);
     final accent = context.onsetColors.live;
+    final l = context.l10n;
     return PopupMenuButton<StreamSort>(
-      tooltip: 'Sort streams',
+      tooltip: l.streamSortTooltip,
       initialValue: sort,
       onSelected: onSort,
       position: PopupMenuPosition.under,
@@ -48,7 +51,7 @@ class StreamSortButton extends StatelessWidget {
             height: 44,
             padding: EdgeInsets.zero,
             child: _SortOption(
-              label: option.label,
+              label: option.label(context.l10n),
               selected: option == sort,
               accent: accent,
               colors: colors,
@@ -65,16 +68,17 @@ class StreamSortButton extends StatelessWidget {
             Flexible(
               child: Text.rich(
                 TextSpan(
-                  text: 'Sorted by ',
-                  children: [
+                  // "Sorted by" and the order in bold, where the language
+                  // puts it.
+                  children: l10nSpans(l.streamSortedBy(sort: l10nMark(0)), [
                     TextSpan(
-                      text: sort.label,
+                      text: sort.label(l),
                       style: TextStyle(
                         fontWeight: FontWeight.w600,
                         color: colors.text,
                       ),
                     ),
-                  ],
+                  ]),
                 ),
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
@@ -155,8 +159,9 @@ class FollowedSortButton extends StatelessWidget {
     return Observer(
       builder: (context) {
         final sort = settingsStore.followedSort;
+        final l = context.l10n;
         return PopupMenuButton<FollowedSort>(
-          tooltip: 'Sort live channels',
+          tooltip: l.followedSortTooltip,
           initialValue: sort,
           onSelected: (value) => settingsStore.followedSort = value,
           itemBuilder: (context) => [
@@ -164,7 +169,7 @@ class FollowedSortButton extends StatelessWidget {
               CheckedPopupMenuItem(
                 value: option,
                 checked: option == sort,
-                child: Text(option.label),
+                child: Text(option.label(l)),
               ),
           ],
           child: Container(
@@ -186,7 +191,7 @@ class FollowedSortButton extends StatelessWidget {
                 Icon(Icons.sort_rounded, size: 14, color: colors.body),
                 Flexible(
                   child: Text(
-                    'Sorted by ${sort.label}',
+                    l.streamSortedBy(sort: sort.label(l)),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(

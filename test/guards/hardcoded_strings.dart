@@ -1,0 +1,1077 @@
+import 'dart:io';
+
+import 'package:analyzer/dart/analysis/utilities.dart';
+import 'package:analyzer/dart/ast/ast.dart';
+import 'package:analyzer/dart/ast/visitor.dart';
+import 'package:analyzer/source/line_info.dart';
+
+/// The scanner of `no_hardcoded_strings_test.dart`: which string literals
+/// of `lib/` read like text a viewer sees, and so belong in the ARB files.
+///
+/// A literal is flagged when it has two letters in a row and is either in a
+/// place that shows text (the argument of `Text`, a `label:`, a `tooltip:`,
+/// a default `title`, an enum's constructor argument...) or reads like a
+/// sentence (two words or more) anywhere. Code is left alone: directives,
+/// annotations, logs, asserts, exceptions, `RegExp`, `Uri`, keys, route
+/// names, platform channels, preferences keys, map keys and indexes,
+/// comparisons and `case` patterns, URLs, hosts, asset paths and
+/// triple-quoted strings (scripts, queries).
+
+/// One flagged literal.
+class FlaggedLiteral {
+  const FlaggedLiteral({
+    required this.path,
+    required this.line,
+    required this.text,
+    required this.reason,
+  });
+
+  final String path;
+  final int line;
+
+  /// Its text, each interpolation shown as `{}` (how the allow-list names
+  /// it).
+  final String text;
+
+  /// 'ui' (a place that shows text) or 'sentence'.
+  final String reason;
+
+  @override
+  String toString() => '$path:$line [$reason] $text';
+}
+
+/// The Dart files the guard reads: `lib/`, without generated code.
+List<File> scannedFiles([String root = 'lib']) {
+  final files =
+      Directory(root)
+          .listSync(recursive: true)
+          .whereType<File>()
+          .where((f) => f.path.endsWith('.dart'))
+          .where((f) => !f.path.endsWith('.g.dart'))
+          .where((f) => !_generatedL10n.hasMatch(f.path.replaceAll('\\', '/')))
+          .toList()
+        ..sort((a, b) => a.path.compareTo(b.path));
+  return files;
+}
+
+final _generatedL10n = RegExp(r'(^|/)lib/l10n/app_localizations[^/]*\.dart$');
+
+/// The literals of [source] (the file at [path]) that read like UI text.
+///
+/// [helpers] are the project's functions that show a parameter as text
+/// ([uiHelpersIn]); by default, those of [source] itself.
+List<FlaggedLiteral> flaggedIn(
+  String source, {
+  String path = 'source.dart',
+  UiHelpers? helpers,
+}) {
+  final result = parseString(
+    content: source,
+    path: path,
+    throwIfDiagnostics: false,
+  );
+  final visitor = _Visitor(
+    path,
+    result.lineInfo,
+    helpers ?? uiHelpersIn([source]),
+  );
+  result.unit.accept(visitor);
+  return visitor.found;
+}
+
+/// Functions and methods that show one of their parameters as text, by
+/// name: each with the parameters that do (`#0` for the first positional
+/// one, the name for a named one). A literal passed there is UI text. A
+/// function whose result is shown as text somewhere has [_returns] too:
+/// the literals it returns are UI text.
+typedef UiHelpers = Map<String, Set<String>>;
+
+/// The [UiHelpers] key of a function whose result is shown as text.
+const _returns = 'return';
+
+/// The [UiHelpers] key of a name read as a property shown as text: a
+/// getter of that name returns UI text.
+const _readAsText = 'get';
+
+/// The [UiHelpers] of [sources]: a parameter that reaches a place showing
+/// text (`Text(message)`, `label: title`), directly or through another
+/// helper.
+UiHelpers uiHelpersIn(Iterable<String> sources) {
+  final units = [
+    for (final source in sources)
+      parseString(content: source, throwIfDiagnostics: false).unit,
+  ];
+  final helpers = <String, Set<String>>{};
+  for (var pass = 0; pass < 6; pass++) {
+    final finder = _HelperFinder(helpers);
+    for (final unit in units) {
+      unit.accept(finder);
+    }
+    if (!finder.changed) break;
+  }
+  return helpers;
+}
+
+class _HelperFinder extends RecursiveAstVisitor<void> {
+  _HelperFinder(this.helpers);
+
+  final UiHelpers helpers;
+  var changed = false;
+
+  @override
+  void visitFunctionDeclaration(FunctionDeclaration node) {
+    _check(
+      node.name.lexeme,
+      node.functionExpression.parameters,
+      node.functionExpression.body,
+    );
+    super.visitFunctionDeclaration(node);
+  }
+
+  @override
+  void visitMethodDeclaration(MethodDeclaration node) {
+    _check(node.name.lexeme, node.parameters, node.body);
+    super.visitMethodDeclaration(node);
+  }
+
+  /// A call shown as text (`Text(viewersText(n))`): the function returns
+  /// UI text, so the literals it returns are flagged ([_returnsUi]).
+  @override
+  void visitMethodInvocation(MethodInvocation node) {
+    if (_inUiPlace(node, helpers)) _mark(node.methodName.name, _returns);
+    super.visitMethodInvocation(node);
+  }
+
+  /// A getter read as a property shown as text (`Text(caption)`,
+  /// `Text(kind.word)`, an extension's getter too): it returns UI text.
+  @override
+  void visitSimpleIdentifier(SimpleIdentifier node) {
+    final parent = node.parent;
+    final AstNode read = switch (parent) {
+      PrefixedIdentifier(:final identifier) when identifier == node => parent,
+      PropertyAccess(:final propertyName) when propertyName == node => parent,
+      _ => node,
+    };
+    // Calls are seen above; a name being declared is no read.
+    if (parent is! MethodInvocation &&
+        !node.inDeclarationContext() &&
+        !_dataGetters.contains(node.name) &&
+        _inUiPlace(read, helpers)) {
+      _mark(node.name, _readAsText);
+    }
+    super.visitSimpleIdentifier(node);
+  }
+
+  /// A constructor taking a field (`A(this.title)`, positional or named)
+  /// the class shows as text (`Text(title)`, `Text(widget.title)` in its
+  /// state, in the same file): the literal passed there is UI text.
+  @override
+  void visitConstructorDeclaration(ConstructorDeclaration node) {
+    final className = switch (node.parent) {
+      ClassDeclaration(:final name) => name.lexeme,
+      _ => null,
+    };
+    final owner = node.parent;
+    if (className != null && owner != null) {
+      var position = 0;
+      for (final parameter in node.parameters.parameters) {
+        final key = parameter.isNamed
+            ? parameter.name?.lexeme
+            : '#${position++}';
+        final inner = parameter is DefaultFormalParameter
+            ? parameter.parameter
+            : parameter;
+        if (key == null || inner is! FieldFormalParameter) continue;
+        if (_fieldShown(owner, node.root, inner.name.lexeme)) {
+          _mark(className, key);
+        }
+      }
+    }
+    super.visitConstructorDeclaration(node);
+  }
+
+  /// Whether [field] of the class [owner] is shown as text: in the class
+  /// (`Text(title)`), or anywhere in [unit] as `widget.title` (its state).
+  bool _fieldShown(AstNode owner, AstNode unit, String field) {
+    bool shownIn(AstNode scope, bool Function(SimpleIdentifier) counts) {
+      final uses = _Uses({field});
+      scope.accept(uses);
+      for (final use in uses.found) {
+        if (use.inDeclarationContext()) continue;
+        if (use.parent is FieldFormalParameter) continue;
+        if (!counts(use)) continue;
+        if (_inUiPlace(_readOf(use), helpers)) return true;
+      }
+      return false;
+    }
+
+    return shownIn(owner, (_) => true) ||
+        shownIn(
+          unit,
+          (use) => switch (use.parent) {
+            PrefixedIdentifier(:final prefix, :final identifier) =>
+              identifier == use && prefix.name == 'widget',
+            _ => false,
+          },
+        );
+  }
+
+  void _mark(String name, String key) {
+    if (helpers.putIfAbsent(name, () => {}).add(key)) changed = true;
+  }
+
+  void _check(String name, FormalParameterList? parameters, FunctionBody body) {
+    if (parameters == null) return;
+    final keys = <String, String>{};
+    var position = 0;
+    for (final parameter in parameters.parameters) {
+      final id = parameter.name?.lexeme;
+      if (id == null) continue;
+      keys[id] = parameter.isNamed ? id : '#${position++}';
+    }
+    if (keys.isEmpty) return;
+    final uses = _Uses(keys.keys.toSet());
+    body.accept(uses);
+    for (final use in uses.found) {
+      if (_inUiPlace(use, helpers)) {
+        if (helpers.putIfAbsent(name, () => {}).add(keys[use.name]!)) {
+          changed = true;
+        }
+      }
+    }
+  }
+}
+
+class _Uses extends RecursiveAstVisitor<void> {
+  _Uses(this.names);
+
+  final Set<String> names;
+  final found = <SimpleIdentifier>[];
+
+  @override
+  void visitSimpleIdentifier(SimpleIdentifier node) {
+    if (names.contains(node.name)) found.add(node);
+  }
+}
+
+/// [flagged] grouped by file, without what [allowlist] lets through.
+Map<String, List<FlaggedLiteral>> notAllowed(
+  Iterable<FlaggedLiteral> flagged,
+  Map<String, Map<String, String>> allowlist,
+) {
+  final byFile = <String, List<FlaggedLiteral>>{};
+  for (final literal in flagged) {
+    if (allowlist[literal.path]?.containsKey(literal.text) ?? false) continue;
+    byFile.putIfAbsent(literal.path, () => []).add(literal);
+  }
+  return byFile;
+}
+
+/// The allow-list entries that let nothing through: a file without the
+/// literal flagged (it was extracted or rewritten), or no such file.
+List<String> staleAllowlistEntries(
+  Iterable<FlaggedLiteral> flagged,
+  Map<String, Map<String, String>> allowlist,
+) {
+  final seen = {for (final literal in flagged) (literal.path, literal.text)};
+  return [
+    for (final MapEntry(key: path, value: texts) in allowlist.entries)
+      for (final text in texts.keys)
+        if (!seen.contains((path, text))) '$path: $text',
+  ];
+}
+
+/// What breaks the ratchet: [counts] (literals left per file) must equal
+/// [baseline] exactly. A file over its count, or with literals and no
+/// count, fails; a file under its count fails too, until the baseline is
+/// lowered to lock the progress in; a count for a file that is clean (or
+/// gone) is stale.
+List<String> ratchetProblems(
+  Map<String, int> counts,
+  Map<String, int> baseline,
+) {
+  final problems = <String>[];
+  for (final MapEntry(key: path, value: count) in counts.entries) {
+    final allowed = baseline[path];
+    if (count == 0) continue;
+    if (allowed == null) {
+      problems.add(
+        '$path: $count hard-coded string(s) in a file the baseline does not '
+        'list: move them to lib/l10n/app_en.arb and app_fr.arb',
+      );
+    } else if (count > allowed) {
+      problems.add(
+        '$path: $count hard-coded strings, the baseline allows $allowed: '
+        'move the new ones to the ARB files',
+      );
+    } else if (count < allowed) {
+      problems.add(
+        '$path: $count hard-coded strings, under the baseline\'s $allowed: '
+        'lower it to $count in test/guards/l10n_baseline.dart',
+      );
+    }
+  }
+  for (final MapEntry(key: path, value: allowed) in baseline.entries) {
+    if ((counts[path] ?? 0) == 0) {
+      problems.add(
+        '$path: clean (or gone), but the baseline still allows $allowed: '
+        'remove it from test/guards/l10n_baseline.dart',
+      );
+    }
+  }
+  return problems;
+}
+
+const _placeholder = '\u{FFFC}';
+final _letters = RegExp(r'\p{L}{2,}', unicode: true);
+final _codeToken = RegExp(r'^[\w-]+[:_/.][\w-]+(?:[:_/.][\w-]+)*$');
+final _codeChars = RegExp(r'[=`\\]');
+
+/// Whether [text] reads as code rather than a sentence: an `=`, a backtick
+/// or a backslash anywhere, or a brace or a semicolon beside another mark of
+/// code (a bracket, a colon, a quote...) or ending it. A sentence may hold
+/// a `;` or a `{` ("Slow mode; 30s", "Press {Enter}").
+bool _looksLikeCode(String text) {
+  if (_codeChars.hasMatch(text)) return true;
+  if (!text.contains(RegExp(r'[{};]'))) return false;
+  return text.contains(RegExp(r'[()\[\]<>:"$]')) ||
+      // A block: `{ id name }` (a query, a style); a sentence's `{Enter}`
+      // hugs its word.
+      text.contains(RegExp(r'\{\s|\s\}')) ||
+      RegExp(r'[;{}]$').hasMatch(text.trimRight());
+}
+
+/// Whether [text], in a place that shows text, is code anyway: an `=`, a
+/// backtick or a backslash, a block (`{ id }`), or a brace or semicolon
+/// ending it. Unlike [_looksLikeCode], a colon or a bracket beside a
+/// semicolon is a sentence's ("Note: this may take a while; please wait").
+bool _looksLikeCodeInUi(String text) =>
+    _codeChars.hasMatch(text) ||
+    text.contains(RegExp(r'\{\s|\s\}')) ||
+    RegExp(r'[;{}]$').hasMatch(text.trimRight());
+
+/// What a field or variable assigned a literal (`_error = 'Failed'`) is
+/// called when it holds text to show, beyond the UI names.
+final _uiAssignee = RegExp(
+  r'^(error|errorText|errorMessage|message|notice|warning|problemText)$',
+);
+
+/// Positional arguments of these methods are written into a text
+/// (`StringBuffer.write`).
+const _writeMethods = {'write', 'writeln', 'writeAll'};
+
+/// Closures passed as these name text a widget shows (`labelOf:`,
+/// `textBuilder:`): what they return is UI text.
+final _uiClosureName = RegExp(
+  r'^(builder|labelOf|titleOf|textOf|captionOf|tooltipOf|hintOf|\w*Builder)$',
+);
+final _host = RegExp(r'^[a-z0-9-]+(?:\.[a-z0-9-]+)+(?:/\S*)?$');
+
+/// One token with a separator between word characters: `v5.0.5`,
+/// `chat:read`, `a/b` (not `Done.` or `Error:`, words with punctuation).
+final _snakeOrDotted = RegExp(r'^[\w-]+(?:[.:/][\w-]+)+$');
+
+/// Two hyphens or more: an id or a tag (`predictions-channel-v1`), code
+/// anywhere.
+final _kebab = RegExp(r'^[a-z0-9]+(?:-[a-z0-9]+){2,}$');
+
+/// One hyphen: an IRC tag (`msg-id`) outside a place that shows text, a
+/// word (`pop-up`, `sign-in`) in one.
+final _singleHyphen = RegExp(r'^[a-z0-9]+-[a-z0-9]+$');
+
+/// Getters named for data (`id`, `name`): read as text they show Twitch's
+/// data, not words of the app's, and their names are everywhere.
+const _dataGetters = {
+  'id',
+  'key',
+  'name',
+  'login',
+  'type',
+  'value',
+  'raw',
+  'code',
+  'url',
+  'slug',
+};
+
+/// Variables holding UI text by name (`themeNames`, `_notes`).
+final _uiVariable = RegExp(
+  r'(names|Names|labels|Labels|label|Label|titles|Titles|notes|Notes)$',
+);
+
+/// Named arguments taking a map whose keys are texts a screen reader reads
+/// (the labels of custom semantics actions).
+const _uiMapArguments = {'actions', 'customSemanticsActions'};
+
+/// Callees whose arguments are never UI text.
+const _exemptClasses = {
+  'RegExp',
+  'Uri',
+  'Key',
+  'ValueKey',
+  'ObjectKey',
+  'PageStorageKey',
+  'GlobalKey',
+  'GlobalObjectKey',
+  'LabeledGlobalKey',
+  'RouteSettings',
+  'MethodChannel',
+  'EventChannel',
+  'BasicMessageChannel',
+  'OptionalMethodChannel',
+  'FlutterErrorDetails',
+  // Built for a crash report, never shown (unlike an API error).
+  'StateError',
+  'ErrorDescription',
+  'ErrorSummary',
+  'ErrorHint',
+  'DateFormat',
+  'NumberFormat',
+  'AssetImage',
+  'Locale',
+  'Telemetry',
+  'FirebaseCrashlytics',
+  'FirebaseAnalytics',
+  'FirebasePerformance',
+  'Intl',
+  'Process',
+  'Platform',
+};
+
+const _exemptMethods = {
+  'debugPrint',
+  'debugPrintStack',
+  // The stores' own debug log and crash report helpers.
+  '_log',
+  '_reportUnexpected',
+  '_reportRateTrouble',
+  'print',
+  'log',
+  'recordError',
+  'recordFlutterError',
+  'setCustomKey',
+  'logEvent',
+  'logScreenView',
+  'newTrace',
+  'newHttpMetric',
+  'invokeMethod',
+  'invokeListMethod',
+  'invokeMapMethod',
+  'runJavaScript',
+  'runJavaScriptReturningResult',
+  'addJavaScriptChannel',
+  'removeJavaScriptChannel',
+  'fromEnvironment',
+  'getString',
+  'setString',
+  'getBool',
+  'setBool',
+  'getInt',
+  'setInt',
+  'getDouble',
+  'setDouble',
+  'getStringList',
+  'setStringList',
+  'containsKey',
+  'contains',
+  'startsWith',
+  'endsWith',
+  'replaceAll',
+  'replaceFirst',
+  'replaceAllMapped',
+  'split',
+  'indexOf',
+  'lastIndexOf',
+  'matchAsPrefix',
+  'hasMatch',
+  'firstMatch',
+  'allMatches',
+  'padLeft',
+  'padRight',
+  'parse',
+  'tryParse',
+  // A cancel token's reason, for logs.
+  'cancel',
+};
+
+/// Named arguments that never carry UI text (even when their name looks
+/// like it).
+const _exemptNames = {
+  'key',
+  'debugLabel',
+  'restorationId',
+  'fontFamily',
+  'package',
+  'identifier',
+  'name',
+  'tag',
+  'heroTag',
+  'reason',
+  'routeName',
+  'scheme',
+  'host',
+  'path',
+  'query',
+  'fragment',
+  'userAgent',
+  'mimeType',
+  'contentType',
+  'method',
+};
+
+const _uiNames = {
+  'label',
+  'tooltip',
+  'title',
+  'subtitle',
+  'message',
+  'hint',
+  'hintText',
+  'semanticsLabel',
+  'semanticLabel',
+  'description',
+  'detail',
+  'confirm',
+  'cancel',
+  'body',
+  'groupLabel',
+  'trailingTooltip',
+  'text',
+  'action',
+  'emptyMessage',
+  'placeholder',
+  'header',
+  'caption',
+  'note',
+  'summary',
+  'heading',
+  'eyebrow',
+  'subject',
+  'applicationName',
+  'applicationLegalese',
+  'status',
+  'headline',
+  'lead',
+  'question',
+  'prompt',
+  'warning',
+  'options',
+  'selectedOption',
+  'labels',
+  'tabs',
+};
+
+final _uiSuffix = RegExp(
+  r'(Label|Text|Title|Subtitle|Tooltip|Message|Hint|Detail|Description)$',
+);
+
+/// Callees whose positional arguments show text.
+const _uiPositional = {
+  'Text',
+  'SelectableText',
+  'SheetSectionLabel',
+  'ReleaseVersionPill',
+};
+
+/// Methods that give a list of some of the same words (`where`, `toList`):
+/// joined after them, the words are still the text.
+const _listMethods = {
+  'where',
+  'whereType',
+  'toList',
+  'followedBy',
+  'skip',
+  'take',
+  'skipWhile',
+  'takeWhile',
+};
+
+/// Properties that give a list of some of the same words.
+const _listProperties = {'nonNulls', 'reversed'};
+
+/// Whether [node] is a list literal, or one filtered by [_listMethods] or
+/// [_listProperties] (`['Poll', t].where((s) => s.isNotEmpty)`).
+bool _isListy(AstNode node) => switch (node) {
+  ListLiteral() => true,
+  MethodInvocation(:final target?, :final methodName) =>
+    _listMethods.contains(methodName.name) && _isListy(target),
+  PropertyAccess(:final target?, :final propertyName) =>
+    _listProperties.contains(propertyName.name) && _isListy(target),
+  _ => false,
+};
+
+/// Methods that keep a literal UI text (`'First launch'.toUpperCase()`).
+const _transparentMethods = {'toUpperCase', 'toLowerCase', 'trim'};
+
+bool _isUiName(String name) =>
+    !_exemptNames.contains(name) &&
+    (_uiNames.contains(name) || _uiSuffix.hasMatch(name));
+
+class _Visitor extends RecursiveAstVisitor<void> {
+  _Visitor(this.path, this.lines, this.helpers);
+
+  final String path;
+  final LineInfo lines;
+  final UiHelpers helpers;
+  final found = <FlaggedLiteral>[];
+
+  @override
+  void visitSimpleStringLiteral(SimpleStringLiteral node) {
+    if (node.parent is AdjacentStrings) return;
+    _check(node, node.value, multiline: node.isMultiline);
+  }
+
+  @override
+  void visitStringInterpolation(StringInterpolation node) {
+    if (node.parent is! AdjacentStrings) {
+      _check(node, _textOf(node), multiline: node.isMultiline);
+    }
+    for (final element in node.elements) {
+      if (element is InterpolationExpression) element.expression.accept(this);
+    }
+  }
+
+  @override
+  void visitAdjacentStrings(AdjacentStrings node) {
+    final multiline = node.strings.any(
+      (s) =>
+          (s is SimpleStringLiteral && s.isMultiline) ||
+          (s is StringInterpolation && s.isMultiline),
+    );
+    _check(node, node.strings.map(_textOf).join(), multiline: multiline);
+    for (final string in node.strings) {
+      if (string is StringInterpolation) {
+        for (final element in string.elements) {
+          if (element is InterpolationExpression) {
+            element.expression.accept(this);
+          }
+        }
+      }
+    }
+  }
+
+  static String _textOf(StringLiteral node) => switch (node) {
+    SimpleStringLiteral(:final value) => value,
+    StringInterpolation(:final elements) => [
+      for (final element in elements)
+        element is InterpolationString ? element.value : _placeholder,
+    ].join(),
+    AdjacentStrings(:final strings) => strings.map(_textOf).join(),
+  };
+
+  void _check(StringLiteral node, String text, {required bool multiline}) {
+    if (multiline || !_letters.hasMatch(text)) return;
+    if (_textIsCode(text)) return;
+    final uiKey = _isUiMapKey(node);
+    if (_contextIsCode(node, uiKey: uiKey)) return;
+    final String reason;
+    if (uiKey || _inUiPlace(node, helpers)) {
+      // In a place that shows text, only code's own marks make it code: a
+      // sentence there may hold a colon and a semicolon ("Note: …; …"),
+      // and a word one hyphen ("pop-up", "sign-in").
+      if (_looksLikeCodeInUi(text)) return;
+      reason = 'ui';
+    } else if (_singleHyphen.hasMatch(text.trim())) {
+      // An IRC tag or an id ("msg-id", "sub-gift") outside a text place.
+      return;
+    } else if (_sentenceLike(text)) {
+      reason = 'sentence';
+    } else {
+      return;
+    }
+    final line = lines.getLocation(node.offset).lineNumber;
+    found.add(
+      FlaggedLiteral(
+        path: path,
+        line: line,
+        text: text.replaceAll(_placeholder, '{}'),
+        reason: reason,
+      ),
+    );
+  }
+
+  static bool _textIsCode(String text) {
+    final t = text.trim();
+    if (t.contains('://') || t.startsWith('mailto:')) return true;
+    if (t.startsWith('assets/') || t.startsWith('packages/')) return true;
+    if (_host.hasMatch(t)) return true;
+    if (RegExp(r'^#[0-9A-Fa-f]{3,8}$').hasMatch(t)) return true;
+    if (!t.contains(RegExp(r'\s')) &&
+        (t.startsWith('/') ||
+            t.contains('_') ||
+            _snakeOrDotted.hasMatch(t) ||
+            _kebab.hasMatch(t))) {
+      return true;
+    }
+    return false;
+  }
+
+  static bool _sentenceLike(String text) {
+    if (_looksLikeCode(text)) return false;
+    final words = text
+        .split(RegExp(r'\s+'))
+        .where((w) => _letters.hasMatch(w) && !_codeToken.hasMatch(w));
+    return words.length >= 2;
+  }
+
+  /// The names a call is known by: `Text`, `Uri.https` gives Uri and
+  /// https, `prefs.setString` gives setString.
+  static Set<String> _calleeNames(AstNode? call) {
+    if (call is InstanceCreationExpression) {
+      final name = call.constructorName;
+      return {name.type.name.lexeme, ?name.name?.name};
+    }
+    if (call is MethodInvocation) {
+      final target = call.target;
+      return {
+        call.methodName.name,
+        if (target is SimpleIdentifier) target.name,
+        if (target is PrefixedIdentifier) target.identifier.name,
+      };
+    }
+    return const {};
+  }
+
+  // An exception's message is code only when it is thrown (the throw
+  // exempts it): a built one can be shown (an API error on screen).
+  static bool _exemptCallee(Set<String> names) => names.any(
+    (n) => _exemptClasses.contains(n) || _exemptMethods.contains(n),
+  );
+
+  /// Walks up from [node] through what keeps its text as it is
+  /// (parentheses, a branch of `?:`, `??`, `+`, an interpolation, a switch
+  /// expression's result, a list, `.toUpperCase()`): the node it lands in
+  /// and the child it came from.
+  static (AstNode, AstNode?) _anchor(AstNode node) {
+    AstNode child = node;
+    var parent = node.parent;
+    while (parent != null) {
+      final transparent = switch (parent) {
+        ParenthesizedExpression() ||
+        InterpolationExpression() ||
+        StringInterpolation() ||
+        AdjacentStrings() ||
+        AsExpression() ||
+        ListLiteral() => true,
+        ConditionalExpression(:final condition) => child != condition,
+        BinaryExpression(:final operator) =>
+          operator.lexeme == '??' || operator.lexeme == '+',
+        SwitchExpressionCase(:final expression) => child == expression,
+        SwitchExpression() => child is SwitchExpressionCase,
+        // `.toUpperCase()`; a list's words joined (`[…].join(' · ')`),
+        // filtered first (`[…].where(…).join(', ')`).
+        MethodInvocation(:final target, :final methodName) =>
+          child == target &&
+              (_transparentMethods.contains(methodName.name) ||
+                  (_isListy(child) &&
+                      (methodName.name == 'join' ||
+                          _listMethods.contains(methodName.name)))),
+        // `['Welcome'].first`: a word of the list read out.
+        PropertyAccess(:final target, :final propertyName) =>
+          child == target &&
+              _isListy(child) &&
+              const {
+                'first',
+                'last',
+                'single',
+                ..._listProperties,
+              }.contains(propertyName.name),
+        MapLiteralEntry(:final value) => child == value,
+        SetOrMapLiteral() => child is MapLiteralEntry,
+        _ => false,
+      };
+      if (!transparent) break;
+      child = parent;
+      parent = parent.parent;
+    }
+    return (child, parent);
+  }
+
+  /// Whether [node] is a map key that names text: one of a map of
+  /// screen-reader actions (`actions: {'Change chat layout': …}`, built
+  /// into `CustomSemanticsAction`s). Other map keys are code.
+  static bool _isUiMapKey(AstNode node) {
+    final (child, anchor) = _anchor(node);
+    if (anchor is! MapLiteralEntry || anchor.key != child) return false;
+    // Up through `if` and `for` elements to the map.
+    var map = anchor.parent;
+    while (map is IfElement || map is ForElement) {
+      map = map?.parent;
+    }
+    return map is SetOrMapLiteral &&
+        map.parent is NamedExpression &&
+        _uiMapArguments.contains(
+          (map.parent! as NamedExpression).name.label.name,
+        );
+  }
+
+  bool _contextIsCode(AstNode node, {bool uiKey = false}) {
+    final (child, anchor) = _anchor(node);
+    switch (anchor) {
+      case MapLiteralEntry(:final key) when key == child && !uiKey:
+        return true;
+      case IndexExpression(:final index) when index == child:
+        return true;
+      case BinaryExpression(:final operator)
+          when operator.lexeme == '==' || operator.lexeme == '!=':
+        return true;
+      case NamedExpression(:final name)
+          when _exemptNames.contains(name.label.name):
+        return true;
+      case DartPattern() || SwitchCase():
+        return true;
+      default:
+        break;
+    }
+    for (AstNode? up = node.parent; up != null; up = up.parent) {
+      switch (up) {
+        case Directive() ||
+            Annotation() ||
+            AssertStatement() ||
+            AssertInitializer() ||
+            ThrowExpression():
+          return true;
+        case MethodDeclaration(:final name) when name.lexeme == 'toString':
+          return true;
+        case InstanceCreationExpression() || MethodInvocation():
+          if (_exemptCallee(_calleeNames(up))) return true;
+        default:
+          break;
+      }
+    }
+    return false;
+  }
+}
+
+/// Whether [node] (a literal, or a parameter in a helper) lands in a place
+/// that shows text, the [helpers] included.
+bool _inUiPlace(AstNode node, UiHelpers helpers, [int depth = 0]) {
+  final (child, anchor) = _Visitor._anchor(node);
+  switch (anchor) {
+    case NamedExpression(:final name):
+      final label = name.label.name;
+      final call = anchor.parent?.parent;
+      if (label == 'value') {
+        return _Visitor._calleeNames(call).contains('Semantics');
+      }
+      if (_isUiName(label)) return true;
+      return _helperTakes(call, label, helpers);
+    case ArgumentList(:final arguments):
+      final call = anchor.parent;
+      if (call is EnumConstantArguments) return true;
+      if (_Visitor._calleeNames(call).any(_uiPositional.contains)) {
+        return true;
+      }
+      // `out.write('Live')`, cascaded too (`StringBuffer()..write('Live')`).
+      if (call is MethodInvocation &&
+          call.realTarget != null &&
+          _writeMethods.contains(call.methodName.name)) {
+        return true;
+      }
+      final position = arguments
+          .where((a) => a is! NamedExpression)
+          .toList()
+          .indexOf(child as Expression);
+      return position >= 0 && _helperTakes(call, '#$position', helpers);
+    case ExpressionFunctionBody():
+      return _inUiFunction(anchor, helpers);
+    case ReturnStatement():
+      return _inUiFunction(anchor, helpers);
+    // A record's field read back by destructuring and shown:
+    // `for (final (label, value) in [('Latency', v)]) Text(label)`.
+    case RecordLiteral(:final fields) when depth < 3:
+      final positional = fields.where((f) => f is! NamedExpression).toList();
+      final index = positional.indexOf(child as Expression);
+      return index >= 0 && _recordFieldShown(anchor, index, helpers, depth);
+    case DefaultFormalParameter(:final defaultValue, :final parameter)
+        when defaultValue == child:
+      final name = parameter.name?.lexeme;
+      return name != null && _isUiName(name);
+    case VariableDeclaration(:final initializer, :final name)
+        when initializer == child:
+      return _uiVariable.hasMatch(name.lexeme) ||
+          (depth < 3 && _usedInUiPlace(anchor, helpers, depth + 1));
+    // `_error = 'Failed'` (in a store, in `setState`), `t = 'Offline'`: a
+    // field or variable named for text, or one shown as text where it is
+    // declared.
+    case AssignmentExpression(
+          :final rightHandSide,
+          :final leftHandSide,
+          :final operator,
+        )
+        when rightHandSide == child &&
+            const {'=', '??=', '+='}.contains(operator.lexeme):
+      final assignee = switch (leftHandSide) {
+        SimpleIdentifier(:final name) => name,
+        PrefixedIdentifier(:final identifier) => identifier.name,
+        PropertyAccess(:final propertyName) => propertyName.name,
+        _ => null,
+      };
+      if (assignee == null) return false;
+      final bare = assignee.replaceFirst(RegExp(r'^_+'), '');
+      if ((_isUiName(bare) && bare != 'status') ||
+          _uiVariable.hasMatch(bare) ||
+          _uiAssignee.hasMatch(bare)) {
+        return true;
+      }
+      final declaration = _declarationOf(anchor, assignee);
+      return declaration != null &&
+          depth < 3 &&
+          _usedInUiPlace(declaration, helpers, depth + 1);
+    default:
+      return false;
+  }
+}
+
+/// The declaration of the variable or field [name] assigned at [node]: the
+/// nearest enclosing function's, else the file's.
+VariableDeclaration? _declarationOf(AstNode node, String name) {
+  VariableDeclaration? found;
+  for (
+    AstNode? scope = node.thisOrAncestorOfType<FunctionBody>();
+    scope != null && found == null;
+    scope = scope.parent?.thisOrAncestorOfType<FunctionBody>()
+  ) {
+    found = _DeclarationFinder.find(scope, name);
+  }
+  return found ?? _DeclarationFinder.find(node.root, name);
+}
+
+class _DeclarationFinder extends RecursiveAstVisitor<void> {
+  _DeclarationFinder(this.name);
+
+  final String name;
+  VariableDeclaration? found;
+
+  static VariableDeclaration? find(AstNode scope, String name) {
+    final finder = _DeclarationFinder(name);
+    scope.accept(finder);
+    return finder.found;
+  }
+
+  @override
+  void visitVariableDeclaration(VariableDeclaration node) {
+    if (node.name.lexeme == name) found ??= node;
+    super.visitVariableDeclaration(node);
+  }
+}
+
+/// [use] read as a value: up through an index, `!`, `.field`.
+AstNode _readOf(SimpleIdentifier use) {
+  AstNode node = use;
+  while (true) {
+    final parent = node.parent;
+    final next = switch (parent) {
+      IndexExpression(:final target) when target == node => parent,
+      PostfixExpression(:final operator) when operator.lexeme == '!' => parent,
+      PrefixedIdentifier(:final identifier) when identifier == node => parent,
+      PropertyAccess(:final propertyName) when propertyName == node => parent,
+      _ => null,
+    };
+    if (next == null) return node;
+    node = next;
+  }
+}
+
+/// Whether the variable [declaration] is shown as text where it is in
+/// scope: `const w = 'Welcome'; … Text(w)`, a label map read by index
+/// (`Text(names[kind]!)`), a field read as `widget.title`.
+bool _usedInUiPlace(
+  VariableDeclaration declaration,
+  UiHelpers helpers,
+  int depth,
+) {
+  final name = declaration.name.lexeme;
+  final AstNode scope =
+      declaration.thisOrAncestorOfType<FunctionBody>() ?? declaration.root;
+  final uses = _Uses({name});
+  scope.accept(uses);
+  for (final use in uses.found) {
+    if (use.offset == declaration.name.offset) continue;
+    if (_inUiPlace(_readOf(use), helpers, depth)) return true;
+  }
+  return false;
+}
+
+/// Whether field [index] (positional) of [record] is shown as text where
+/// the record is destructured by a `for`: over the list holding it
+/// (`for (final (a, b) in [(…)])`), or over the variable that list is
+/// put in (`final rows = [(…)]; for (final (a, b) in rows) Text(a)`).
+bool _recordFieldShown(
+  RecordLiteral record,
+  int index,
+  UiHelpers helpers,
+  int depth,
+) {
+  final loops = <ForEachPartsWithPattern>[];
+  final (child, anchor) = _Visitor._anchor(record);
+  if (anchor is ForEachPartsWithPattern && anchor.iterable == child) {
+    loops.add(anchor);
+  } else if (anchor is VariableDeclaration && anchor.initializer == child) {
+    final AstNode scope =
+        anchor.thisOrAncestorOfType<FunctionBody>() ?? anchor.root;
+    final uses = _Uses({anchor.name.lexeme});
+    scope.accept(uses);
+    for (final use in uses.found) {
+      if (use.parent case final ForEachPartsWithPattern parts
+          when parts.iterable == use) {
+        loops.add(parts);
+      }
+    }
+  }
+  for (final parts in loops) {
+    final pattern = parts.pattern;
+    if (pattern is! RecordPattern) continue;
+    final positional = pattern.fields.where((f) => f.name == null).toList();
+    if (index >= positional.length) continue;
+    final field = positional[index].pattern;
+    if (field is! DeclaredVariablePattern) continue;
+    final body = parts.parent.body;
+    final uses = _Uses({field.name.lexeme});
+    body.accept(uses);
+    if (uses.found.any((use) => _inUiPlace(_readOf(use), helpers, depth + 1))) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/// Whether [call] is a helper showing its parameter [key] as text.
+bool _helperTakes(AstNode? call, String key, UiHelpers helpers) {
+  final String? name = switch (call) {
+    MethodInvocation(:final methodName) => methodName.name,
+    InstanceCreationExpression(:final constructorName) =>
+      constructorName.type.name.lexeme,
+    _ => null,
+  };
+  return name != null && (helpers[name]?.contains(key) ?? false);
+}
+
+/// Whether [node] (a function body's expression, or a return) returns from
+/// a getter or function named like UI text (`label`, `title`), or from one
+/// whose result is shown as text ([_returns]).
+bool _inUiFunction(AstNode node, UiHelpers helpers) {
+  for (AstNode? up = node.parent; up != null; up = up.parent) {
+    switch (up) {
+      // A closure passed as `labelOf:` or `textBuilder:` returns UI text.
+      case FunctionExpression(parent: NamedExpression(:final name)):
+        return _isUiName(name.label.name) ||
+            _uiClosureName.hasMatch(name.label.name);
+      case FunctionExpression() when up.parent is! FunctionDeclaration:
+        return false;
+      // A description for logs, even where a screen shows one (`Text('$n')`
+      // reads `toString`).
+      case MethodDeclaration(:final name) when name.lexeme == 'toString':
+        return false;
+      case FunctionDeclaration(:final name, :final isGetter) ||
+          MethodDeclaration(:final name, :final isGetter):
+        final marks = helpers[name.lexeme] ?? const {};
+        return _isUiName(name.lexeme) ||
+            marks.contains(_returns) ||
+            (isGetter && marks.contains(_readAsText));
+      default:
+        break;
+    }
+  }
+  return false;
+}

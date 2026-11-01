@@ -1,5 +1,6 @@
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
+import 'package:onset/l10n/l10n.dart';
 import 'package:onset/services/cache_manager.dart';
 import 'package:onset/utils/context_extensions.dart';
 import 'package:onset/widgets/blurred_container.dart';
@@ -90,7 +91,7 @@ class _OnsetPhotoViewDialogState extends State<OnsetPhotoViewDialog>
     // If replacement yields the same URL, there is no full-res variant.
     final supportsFullRes = fullResUrl != widget.imageUrl;
 
-    final screenHeight = MediaQuery.of(context).size.height;
+    final screenHeight = MediaQuery.sizeOf(context).height;
     final fadeDistance = screenHeight * 0.20; // 20% of screen height
     final buttonsOpacity = (1.0 - (_dragOffset.abs() / fadeDistance)).clamp(
       0.0,
@@ -187,7 +188,7 @@ class _OnsetPhotoViewDialogState extends State<OnsetPhotoViewDialog>
           opacity: buttonsOpacity,
           duration: const Duration(milliseconds: 100),
           child: IconButton(
-            tooltip: 'Close',
+            tooltip: context.l10n.commonClose,
             icon: Icon(
               Icons.close,
               color: context.onsetColors.overlayOnSurface,
@@ -201,7 +202,7 @@ class _OnsetPhotoViewDialogState extends State<OnsetPhotoViewDialog>
             // Place the button roughly between the image area and the bottom of the screen.
             // Assumption: the photo view occupies the top portion of the screen; using
             // a fractional top offset (80%) places the button in the gap between image and bottom.
-            top: MediaQuery.of(context).size.height * 0.8,
+            top: MediaQuery.sizeOf(context).height * 0.8,
             left: 0,
             right: 0,
             child: SafeArea(
@@ -213,7 +214,9 @@ class _OnsetPhotoViewDialogState extends State<OnsetPhotoViewDialog>
                   child: FilledButton.tonal(
                     onPressed: _toggleResolution,
                     child: Text(
-                      _isFullResolution ? 'View thumbnail' : 'View original',
+                      _isFullResolution
+                          ? context.l10n.photoViewThumbnail
+                          : context.l10n.photoViewOriginal,
                       style: TextStyle(
                         color: context.onsetColors.overlayOnSurface,
                       ),

@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_mobx/flutter_mobx.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mobx/mobx.dart' show Observable, ObservableList, runInAction;
 import 'package:mocktail/mocktail.dart';
@@ -11,10 +12,12 @@ import 'package:onset/apis/twitch_api.dart';
 import 'package:onset/apis/twitch_clip_service.dart';
 import 'package:onset/apis/twitch_hype_train_service.dart';
 import 'package:onset/apis/twitch_vod_service.dart';
+import 'package:onset/l10n/l10n.dart';
 import 'package:onset/models/category.dart';
 import 'package:onset/models/channel.dart';
 import 'package:onset/models/clip.dart';
 import 'package:onset/models/followed_channel.dart';
+import 'package:onset/models/onset_release.dart';
 import 'package:onset/models/stream.dart';
 import 'package:onset/models/user.dart';
 import 'package:onset/models/vod.dart';
@@ -42,6 +45,7 @@ import 'package:onset/screens/settings/widgets/release_notes.dart';
 import 'package:onset/screens/vod/vod_player_controller.dart';
 import 'package:onset/screens/whispers/whispers_screen.dart';
 import 'package:onset/services/notifications/activity_log.dart';
+import 'package:onset/services/onset_updater.dart';
 import 'package:onset/services/playback_focus.dart';
 import 'package:onset/services/realtime/twitch_eventsub_client.dart';
 import 'package:onset/stores/mini_player_store.dart';
@@ -55,6 +59,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:simple_pip_mode/simple_pip.dart';
 
 import '../../helpers/fake_vod_controller.dart';
+import '../../helpers/keyboard_animation.dart';
+import '../../helpers/l10n.dart';
 
 class MockTwitchApi extends Mock implements TwitchApi {}
 
@@ -148,7 +154,9 @@ void main() {
     when(
       () => api.getUser(userLogin: any(named: 'userLogin')),
     ).thenAnswer((_) => Future.error(Exception('offline')));
-    settings = SettingsStore.fromJson({})..keepScreenAwake = false;
+    // The language question is answered (it has its own tests below).
+    settings = SettingsStore.fromJson({'languagePromptVersion': 1})
+      ..keepScreenAwake = false;
     activity = ActivityStore(log: await ActivityLog.load());
     whispers = WhisperStore(
       twitchApi: api,
@@ -167,10 +175,21 @@ void main() {
     ThemeMode mode = ThemeMode.light,
     AuthStore? auth,
     bool reduceMotion = false,
+    Locale? locale,
+    double textScale = 1,
   }) async {
     tester.view.physicalSize = size;
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.reset);
+    final app = await localizedApp(
+      tester,
+      locale: locale,
+      textScale: textScale,
+      builder: (context, child) => MediaQuery(
+        data: MediaQuery.of(context).copyWith(disableAnimations: reduceMotion),
+        child: child!,
+      ),
+    );
     final themes = OnsetThemes(colorSchemeSeed: OnsetTokens.accent);
     await tester.pumpWidget(
       MultiProvider(
@@ -186,15 +205,13 @@ void main() {
           Provider<MiniPlayerStore>.value(value: mini),
         ],
         child: MaterialApp(
+          locale: app.locale,
+          supportedLocales: app.supportedLocales,
+          localizationsDelegates: app.delegates,
           theme: themes.light,
           darkTheme: themes.dark,
           themeMode: mode,
-          builder: (context, child) => MediaQuery(
-            data: MediaQuery.of(
-              context,
-            ).copyWith(disableAnimations: reduceMotion),
-            child: child!,
-          ),
+          builder: app.builder,
           navigatorObservers: [OnsetShell.routeObserver],
           home: const Home(),
         ),
@@ -217,7 +234,7 @@ void main() {
     await pump(tester);
     expect(find.text('Following'), findsNothing);
     expect(find.text('Live'), findsOneWidget);
-    expect(find.text('No top streams'), findsOneWidget);
+    expect(find.text('No live streams right now'), findsOneWidget);
 
     // Clips: the feed, built only while it is on screen.
     await tester.tap(find.text('Clips'));
@@ -233,7 +250,7 @@ void main() {
     await tester.tap(nav('activity'));
     await tester.pumpAndSettle();
     expect(find.byType(ActivityScreen), findsOneWidget);
-    expect(find.text("Hooray! You're up to date"), findsOneWidget);
+    expect(find.text('Hooray! You’re up to date'), findsOneWidget);
 
     await tester.tap(nav('profile'));
     await tester.pumpAndSettle();
@@ -241,7 +258,7 @@ void main() {
     // own, the login card, the settings' sections, the header's settings.
     expect(find.byType(ProfileTab), findsOneWidget);
     expect(find.byTooltip('Back'), findsNothing);
-    expect(find.text('Connect with Twitch'), findsOneWidget);
+    expect(find.text('Log in with Twitch'), findsOneWidget);
     expect(find.text('Notifications'), findsOneWidget);
     expect(find.byTooltip('Settings'), findsOneWidget);
     expect(tester.takeException(), isNull);
@@ -289,7 +306,7 @@ void main() {
 
     await tester.tap(nav('browse'));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Search channels, categories or videos'));
+    await tester.tap(find.text('Search channels, categories, or videos'));
     await tester.pumpAndSettle();
     expect(find.byType(SearchScreen), findsOneWidget);
     await close(tester);
@@ -319,7 +336,7 @@ void main() {
     // From Browse's field this time: the same search.
     await tester.tap(nav('browse'));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Search channels, categories or videos'));
+    await tester.tap(find.text('Search channels, categories, or videos'));
     await tester.pumpAndSettle();
     expect(
       tester.widget<TextField>(find.byType(TextField)).controller!.text,
@@ -433,14 +450,14 @@ void main() {
     expect(await tester.binding.handlePopRoute(), isTrue);
     await tester.pumpAndSettle();
     expect(find.byType(ClipsFeedScreen, skipOffstage: false), findsNothing);
-    expect(find.text('No top streams'), findsOneWidget);
+    expect(find.text('No live streams right now'), findsOneWidget);
 
     // Back from Profile: Home.
     await tester.tap(nav('profile'));
     await tester.pumpAndSettle();
     expect(await tester.binding.handlePopRoute(), isTrue);
     await tester.pumpAndSettle();
-    expect(find.text('No top streams'), findsOneWidget);
+    expect(find.text('No live streams right now'), findsOneWidget);
     expect(find.byType(ProfileTab), findsNothing);
 
     // Then the app may close: nothing handles back any more.
@@ -461,7 +478,7 @@ void main() {
     await tester.tap(nav('home'));
     await tester.pumpAndSettle();
     expect(find.byType(ClipsFeedScreen, skipOffstage: false), findsNothing);
-    expect(find.text('No top streams'), findsOneWidget);
+    expect(find.text('No live streams right now'), findsOneWidget);
     await close(tester);
   });
 
@@ -713,6 +730,37 @@ void main() {
     await tester.pump();
     await tester.pumpAndSettle();
     expect(mini.shellChrome, const EdgeInsets.only(top: 56, bottom: 78));
+    await close(tester);
+  });
+
+  testWidgets('the keyboard of a page over Home does not rebuild Home', (
+    tester,
+  ) async {
+    await pump(tester);
+    final navigator = tester.state<NavigatorState>(find.byType(Navigator));
+    unawaited(
+      navigator.push(
+        MaterialPageRoute<void>(
+          builder: (_) => const Scaffold(body: Center(child: TextField())),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.byType(LiveFeed, skipOffstage: false), findsOneWidget);
+    final counts = await countRebuilds(
+      () => animateKeyboard(tester),
+      where: (element) =>
+          element.widget is Home ||
+          element.findAncestorWidgetOfExactType<Home>() != null,
+    );
+    // Home stays mounted under the page: before, its whole shell and every
+    // kept page were built again on each frame of the keyboard.
+    expect(counts.of<Home>(), 0, reason: '$counts');
+    expect(counts.of<OnsetShell>(), 0, reason: '$counts');
+    expect(counts.of<LiveFeed>(), 0, reason: '$counts');
+    await animateKeyboard(tester, open: false);
+    navigator.pop();
+    await tester.pumpAndSettle();
     await close(tester);
   });
 
@@ -1282,7 +1330,7 @@ void main() {
       await tester.tap(nav('home'));
       await tester.pumpAndSettle();
       expect(find.text('Following'), findsNothing);
-      expect(find.text('No top streams'), findsOneWidget);
+      expect(find.text('No live streams right now'), findsOneWidget);
 
       // Logging in again: Following and the whispers are back; the tab on
       // screen stays (a session restored behind the viewer must not move
@@ -1290,7 +1338,7 @@ void main() {
       auth.setLoggedIn(true);
       await tester.pumpAndSettle();
       expect(find.text('Following'), findsOneWidget);
-      expect(find.text('No top streams'), findsOneWidget);
+      expect(find.text('No live streams right now'), findsOneWidget);
       expect(find.byTooltip('Whispers'), findsOneWidget);
       await tester.tap(find.text('Following'));
       await tester.pumpAndSettle();
@@ -1304,12 +1352,12 @@ void main() {
     tester,
   ) async {
     final auth = FakeAuthStore(loggedIn: true);
-    when(() => auth.tokenNotice).thenReturn(AuthBase.foreignTokenNotice);
+    when(() => auth.tokenNotice).thenReturn(TokenNotice.foreignToken);
     when(auth.clearTokenNotice).thenReturn(null);
     await pump(tester, auth: auth);
     await tester.pump(const Duration(milliseconds: 100));
 
-    expect(find.text(AuthBase.foreignTokenNotice), findsOneWidget);
+    expect(find.text(L10n.english.authForeignTokenNotice), findsOneWidget);
     verify(auth.clearTokenNotice).called(1);
     await close(tester);
   });
@@ -1368,7 +1416,7 @@ void main() {
       (widget) => widget is StreamsList && widget.listType == ListType.top,
     );
     expect(live, findsOneWidget);
-    expect(find.text('No top streams'), findsOneWidget);
+    expect(find.text('No live streams right now'), findsOneWidget);
 
     // Home and back: Browse is still on its live channels.
     await tester.tap(nav('home'));
@@ -1394,8 +1442,10 @@ void main() {
   testWidgets('a value saved before the shell still opens its place', (
     tester,
   ) async {
-    settings = SettingsStore.fromJson({'startTab': 'search'})
-      ..keepScreenAwake = false;
+    settings = SettingsStore.fromJson({
+      'startTab': 'search',
+      'languagePromptVersion': 1,
+    })..keepScreenAwake = false;
     await pump(tester);
     expect(find.byType(Categories), findsOneWidget);
     await close(tester);
@@ -1682,7 +1732,369 @@ void main() {
     expect(pushed, contains(ReleaseNotes.routeName));
     await close(tester);
   });
+
+  group('the one-time language question', () {
+    final english = L10n.english;
+    final french = lookupAppLocalizations(const Locale('fr'));
+
+    /// Settings saved by a build before French: never asked.
+    void savedBeforeFrench() {
+      settings = SettingsStore.fromJson({})..keepScreenAwake = false;
+    }
+
+    Future<void> settle(WidgetTester tester) async {
+      for (var i = 0; i < 10; i++) {
+        await tester.pump(const Duration(milliseconds: 100));
+      }
+    }
+
+    testWidgets('asked once to an install from before French, preselected '
+        'to the device; Continue answers it', (tester) async {
+      savedBeforeFrench();
+      await pump(tester);
+      expect(find.text(english.languagePromptTitle), findsOneWidget);
+      await tester.tap(find.text(english.languagePromptConfirm));
+      await tester.pumpAndSettle();
+      expect(find.text(english.languagePromptTitle), findsNothing);
+      expect(settings.appLanguage, AppLanguage.en);
+      expect(settings.languagePromptVersion, kLanguagePromptVersion);
+      await close(tester);
+
+      // Answered: never again.
+      await pump(tester);
+      expect(find.text(english.languagePromptTitle), findsNothing);
+      await close(tester);
+    });
+
+    testWidgets('not asked once answered (a new install answers on the '
+        'onboarding)', (tester) async {
+      await pump(tester);
+      await settle(tester);
+      expect(find.text(english.languagePromptTitle), findsNothing);
+      await close(tester);
+    });
+
+    testWidgets('comes before the release notes, which open after it', (
+      tester,
+    ) async {
+      savedBeforeFrench();
+      SharedPreferences.setMockInitialValues({'last_shown_version': '0.9.0'});
+      notesFor100();
+      await pump(tester);
+      expect(find.text(english.languagePromptTitle), findsOneWidget);
+      expect(find.byType(ReleaseNotes), findsNothing);
+      await tester.tap(find.text(english.languagePromptConfirm));
+      await tester.pumpAndSettle();
+      expect(find.byType(ReleaseNotes), findsOneWidget);
+      await close(tester);
+    });
+
+    testWidgets('the scrim does not close it; back keeps the preselection', (
+      tester,
+    ) async {
+      savedBeforeFrench();
+      tester.platformDispatcher.localesTestValue = const [Locale('fr', 'FR')];
+      addTearDown(tester.platformDispatcher.clearLocalesTestValue);
+      await pump(tester);
+      expect(find.text(english.languagePromptTitle), findsOneWidget);
+      await tester.tapAt(const Offset(20, 40));
+      await tester.pumpAndSettle();
+      expect(find.text(english.languagePromptTitle), findsOneWidget);
+      expect(settings.languagePromptVersion, 0);
+
+      await tester.binding.handlePopRoute();
+      await tester.pumpAndSettle();
+      expect(find.text(english.languagePromptTitle), findsNothing);
+      // The device is French: back confirmed French.
+      expect(settings.appLanguage, AppLanguage.fr);
+      expect(settings.languagePromptVersion, kLanguagePromptVersion);
+      await close(tester);
+    });
+
+    testWidgets('a tap on the pill switches the app (the question with it) '
+        'at once', (tester) async {
+      savedBeforeFrench();
+      tester.view.physicalSize = const Size(390, 844);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.reset);
+      final themes = OnsetThemes(colorSchemeSeed: OnsetTokens.accent);
+      await tester.pumpWidget(
+        MultiProvider(
+          providers: [
+            Provider<AuthStore>.value(value: FakeAuthStore()),
+            Provider<SettingsStore>.value(value: settings),
+            Provider<TwitchApi>.value(value: api),
+            Provider<TwitchClipService>.value(value: clips),
+            Provider<TwitchVodService>.value(value: vods),
+            Provider<TwitchHypeTrainService>.value(
+              value: MockHypeTrainService(),
+            ),
+            Provider<ActivityStore>.value(value: activity),
+            Provider<WhisperStore>.value(value: whispers),
+            Provider<MiniPlayerStore>.value(value: mini),
+          ],
+          child: Observer(
+            builder: (_) => MaterialApp(
+              locale: settings.appLanguage.locale,
+              supportedLocales: AppLocalizations.supportedLocales,
+              localizationsDelegates: AppLocalizations.localizationsDelegates,
+              theme: themes.light,
+              navigatorObservers: [OnsetShell.routeObserver],
+              home: const Home(),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(find.text(english.languagePromptTitle), findsOneWidget);
+      await tester.tap(find.text('Français'));
+      await tester.pumpAndSettle();
+      expect(settings.appLanguage, AppLanguage.fr);
+      expect(find.text(french.languagePromptTitle), findsOneWidget);
+      // The shell under it too.
+      expect(find.text(french.shellSectionHome), findsOneWidget);
+      // Not answered until Continue.
+      expect(settings.languagePromptVersion, 0);
+      await tester.tap(find.text(french.languagePromptConfirm));
+      await tester.pumpAndSettle();
+      expect(settings.appLanguage, AppLanguage.fr);
+      expect(settings.languagePromptVersion, kLanguagePromptVersion);
+      await close(tester);
+    });
+
+    testWidgets('a page opened while the tile lands: asked once it closes', (
+      tester,
+    ) async {
+      savedBeforeFrench();
+      tester.view.physicalSize = const Size(390, 844);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.reset);
+      final navigator = GlobalKey<NavigatorState>();
+      final themes = OnsetThemes(colorSchemeSeed: OnsetTokens.accent);
+      await tester.pumpWidget(
+        MultiProvider(
+          providers: [
+            Provider<AuthStore>.value(value: FakeAuthStore()),
+            Provider<SettingsStore>.value(value: settings),
+            Provider<TwitchApi>.value(value: api),
+            Provider<TwitchClipService>.value(value: clips),
+            Provider<TwitchVodService>.value(value: vods),
+            Provider<TwitchHypeTrainService>.value(
+              value: MockHypeTrainService(),
+            ),
+            Provider<ActivityStore>.value(value: activity),
+            Provider<WhisperStore>.value(value: whispers),
+            Provider<MiniPlayerStore>.value(value: mini),
+          ],
+          child: MaterialApp(
+            navigatorKey: navigator,
+            theme: themes.light,
+            navigatorObservers: [
+              LaunchIntro.navigatorObserver,
+              OnsetShell.routeObserver,
+            ],
+            builder: (context, child) =>
+                LaunchIntro(slotKey: OnsetShell.markKey, child: child!),
+            home: const Scaffold(body: Text('onboarding')),
+          ),
+        ),
+      );
+      await tester.pump();
+      expect(
+        LaunchIntro.land(
+          from: const Rect.fromLTWH(159, 386, 72, 72),
+          onCovered: () => navigator.currentState!.pushAndRemoveUntil(
+            PageRouteBuilder<void>(
+              transitionDuration: Duration.zero,
+              pageBuilder: (_, _, _) => const Home(),
+            ),
+            (_) => false,
+          ),
+        ),
+        isTrue,
+      );
+      await tester.pump();
+      await tester.pump(LaunchIntro.landingDuration * 0.3);
+      await tester.pump(const Duration(milliseconds: 50));
+      expect(find.byType(Home), findsOneWidget);
+      // Home is in front, waiting for the tile; a link opens a page.
+      navigator.currentState!.push(
+        MaterialPageRoute<void>(
+          builder: (_) => const Scaffold(body: Text('channel')),
+        ),
+      );
+      await tester.pump(LaunchIntro.landingDuration);
+      await settle(tester);
+      expect(find.text('channel'), findsOneWidget);
+      expect(find.text(english.languagePromptTitle), findsNothing);
+
+      navigator.currentState!.pop();
+      await settle(tester);
+      expect(find.text(english.languagePromptTitle), findsOneWidget);
+      await close(tester);
+    });
+
+    testWidgets('the update offer waits for the question: never both at '
+        'once', (tester) async {
+      savedBeforeFrench();
+      final updater = _MockUpdater();
+      when(() => updater.enabled).thenReturn(true);
+      when(() => updater.removeInstalledDownloads()).thenAnswer((_) async {});
+      when(() => updater.check()).thenAnswer(
+        (_) async => const UpdateAvailable(
+          OnsetRelease(
+            build: 2023,
+            tag: 'build-2023',
+            notes: 'Faster chat',
+            apkAssetId: 1,
+            shaAssetId: 2,
+            apkSize: 1024,
+          ),
+          2020,
+        ),
+      );
+      tester.view.physicalSize = const Size(390, 844);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.reset);
+      final themes = OnsetThemes(colorSchemeSeed: OnsetTokens.accent);
+      await tester.pumpWidget(
+        MultiProvider(
+          providers: [
+            Provider<AuthStore>.value(value: FakeAuthStore()),
+            Provider<SettingsStore>.value(value: settings),
+            Provider<TwitchApi>.value(value: api),
+            Provider<TwitchClipService>.value(value: clips),
+            Provider<TwitchVodService>.value(value: vods),
+            Provider<TwitchHypeTrainService>.value(
+              value: MockHypeTrainService(),
+            ),
+            Provider<ActivityStore>.value(value: activity),
+            Provider<WhisperStore>.value(value: whispers),
+            Provider<MiniPlayerStore>.value(value: mini),
+            Provider<OnsetUpdater>.value(value: updater),
+          ],
+          child: MaterialApp(
+            theme: themes.light,
+            navigatorObservers: [OnsetShell.routeObserver],
+            home: const Home(),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      verify(() => updater.check()).called(1);
+      expect(find.text(english.languagePromptTitle), findsOneWidget);
+      expect(find.text('Update available'), findsNothing);
+
+      await tester.tap(find.text(english.languagePromptConfirm));
+      await tester.pumpAndSettle();
+      expect(find.text(english.languagePromptTitle), findsNothing);
+      expect(find.text('Update available'), findsWidgets);
+      await close(tester);
+    });
+
+    testWidgets('waits while a page covers Home, then asks', (tester) async {
+      savedBeforeFrench();
+      tester.view.physicalSize = const Size(390, 844);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.reset);
+      final navigator = GlobalKey<NavigatorState>();
+      final themes = OnsetThemes(colorSchemeSeed: OnsetTokens.accent);
+      await tester.pumpWidget(
+        MultiProvider(
+          providers: [
+            Provider<AuthStore>.value(value: FakeAuthStore()),
+            Provider<SettingsStore>.value(value: settings),
+            Provider<TwitchApi>.value(value: api),
+            Provider<TwitchClipService>.value(value: clips),
+            Provider<TwitchVodService>.value(value: vods),
+            Provider<TwitchHypeTrainService>.value(
+              value: MockHypeTrainService(),
+            ),
+            Provider<ActivityStore>.value(value: activity),
+            Provider<WhisperStore>.value(value: whispers),
+            Provider<MiniPlayerStore>.value(value: mini),
+          ],
+          child: MaterialApp(
+            navigatorKey: navigator,
+            theme: themes.light,
+            navigatorObservers: [OnsetShell.routeObserver],
+            home: const Scaffold(body: Text('onboarding')),
+          ),
+        ),
+      );
+      final onboarding = ModalRoute.of(
+        tester.element(find.text('onboarding')),
+      )!;
+      navigator.currentState!.push(
+        MaterialPageRoute<void>(
+          builder: (_) => const Scaffold(body: Text('channel')),
+        ),
+      );
+      await tester.pumpAndSettle();
+      navigator.currentState!.replace(
+        oldRoute: onboarding,
+        newRoute: PageRouteBuilder<void>(
+          transitionDuration: Duration.zero,
+          pageBuilder: (_, _, _) => const Home(),
+        ),
+      );
+      await settle(tester);
+      expect(find.text('channel'), findsOneWidget);
+      expect(find.text(english.languagePromptTitle), findsNothing);
+
+      navigator.currentState!.pop();
+      await settle(tester);
+      expect(find.text(english.languagePromptTitle), findsOneWidget);
+      await close(tester);
+    });
+  });
+
+  group('in French', () {
+    for (final (sizeName, size) in frenchScreenSizes) {
+      for (final scale in frenchTextScales) {
+        // The shell and every section's empty state (each screen's
+        // content has its own French test), in French, then in English.
+        for (final locale in sweepLocales) {
+          testWidgets('Following, Live, Clips, Browse, Activity, '
+              '$sizeName, text ×$scale${sweepName(locale)}', (tester) async {
+            final words = lookupAppLocalizations(locale);
+            await pump(
+              tester,
+              size: size,
+              auth: FakeAuthStore(loggedIn: true),
+              locale: locale,
+              textScale: scale,
+            );
+            expect(find.text(words.streamListEmptyFollowed), findsOneWidget);
+            await expectFrenchThroughout(tester, 'Following');
+
+            for (final tab in [words.shellFeedLive, words.shellFeedClips]) {
+              await tester.tap(find.text(tab).first);
+              await tester.pump();
+              await tester.pump(const Duration(seconds: 1));
+              await expectFrenchThroughout(tester, tab);
+            }
+
+            await tester.tap(nav('browse'));
+            await tester.pumpAndSettle();
+            await expectFrenchThroughout(tester, 'Browse › categories');
+            await tester.tap(find.text(words.shellBrowseLiveChannels).first);
+            await tester.pumpAndSettle();
+            await expectFrenchThroughout(tester, 'Browse › live channels');
+
+            await tester.tap(nav('activity'));
+            await tester.pumpAndSettle();
+            expect(find.text(words.activityEmpty), findsOneWidget);
+            await expectFrenchThroughout(tester, 'Activity');
+            await close(tester);
+          });
+        }
+      }
+    }
+  });
 }
+
+class _MockUpdater extends Mock implements OnsetUpdater {}
 
 class _RouteNames extends NavigatorObserver {
   _RouteNames(this.names);

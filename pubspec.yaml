@@ -17,7 +17,7 @@ publish_to: "none" # Remove this line if you wish to publish to pub.dev
 # https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/CoreFoundationKeys.html
 # In Windows, build-name is used as the major, minor, and patch parts
 # of the product and file versions while build-number is used as the build suffix.
-version: 1.0.0+1
+version: 1.1.0+1
 
 environment:
   sdk: ^3.9.0
@@ -30,6 +30,9 @@ environment:
 # versions available, run `flutter pub outdated`.
 dependencies:
     flutter:
+        sdk: flutter
+    # French and English: lib/l10n and l10n.yaml.
+    flutter_localizations:
         sdk: flutter
     json_annotation: ^4.6.0
 
@@ -105,12 +108,17 @@ dev_dependencies:
     mocktail: ^1.0.4
     fake_async: ^1.3.3
     http_mock_adapter: ^0.6.1
+    # Parses lib/ in the hard-coded strings guard (test/guards).
+    analyzer: ^9.0.0
 
 # For information on the generic Dart part of this file, see the
 # following page: https://dart.dev/tools/pub/pubspec
 
 # The following section is specific to Flutter packages.
 flutter:
+    # The localizations (lib/l10n/app_localizations*.dart) from the ARB files.
+    generate: true
+
     # The following line ensures that the Material Icons font is
     # included with your application, so that you can use the icons in
     # the material Icons class.
@@ -156,6 +164,8 @@ flutter:
         - assets/celebrations/spark_white.png
         - assets/celebrations/spark_dot.png
         - assets/release-notes.md
+        # Its French translation, version for version (release_notes_fr_test).
+        - assets/release-notes.fr.md
         # The Inter font's licence, shown on the Licenses page.
         - assets/fonts/OFL.txt
         # The ONSET mark: the app icon downscaled for 30, 52 and 72 dp tiles,

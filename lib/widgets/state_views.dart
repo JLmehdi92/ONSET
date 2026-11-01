@@ -1,15 +1,17 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
+import 'package:onset/l10n/api_errors.dart';
+import 'package:onset/l10n/l10n.dart';
 import 'package:onset/screens/home/stream_list/stream_card_parts.dart';
 import 'package:onset/theme.dart';
 import 'package:onset/utils/context_extensions.dart';
 import 'package:onset/widgets/motion/press_scale.dart';
 import 'package:onset/widgets/state_glyph.dart';
 
-/// The app's words for a connection problem: the feeds' own message, and
-/// the network error every API call reports (`NetworkException`).
-bool isConnectionProblem(String message) =>
-    message == 'Unable to connect to Twitch' ||
-    message == 'No internet connection. Please check your network.';
+/// The app's words for a connection problem, in the language on screen:
+/// the feeds' own message, and the network error every API call reports
+/// (`NetworkException`), worded (`isConnectionProblemText`).
+bool isConnectionProblem(String message) => isConnectionProblemText(message);
 
 /// Dark or light text on [fill], whichever reads better (the accent can
 /// be any colour the viewer picked).
@@ -36,7 +38,7 @@ class FeedStatusView extends StatelessWidget {
     this.actionIcon,
     this.signalOff = false,
     this.primaryAction = false,
-  });
+  }) : _standardAction = null;
 
   /// Nothing to show: the message under the signal turned off, or, with
   /// [glyph], under that glyph in its disc (Activity's bell), with an
@@ -48,6 +50,7 @@ class FeedStatusView extends StatelessWidget {
     this.glyph,
   }) : icon = null,
        action = null,
+       _standardAction = null,
        onAction = null,
        actionGlyph = null,
        actionIcon = null,
@@ -65,7 +68,8 @@ class FeedStatusView extends StatelessWidget {
        glyph = isConnectionProblem(message)
            ? StateGlyphKind.offline
            : StateGlyphKind.alert,
-       action = 'Try again',
+       action = null,
+       _standardAction = _tryAgain,
        onAction = onRetry,
        actionGlyph = StateGlyphKind.retry,
        actionIcon = null,
@@ -81,7 +85,8 @@ class FeedStatusView extends StatelessWidget {
   }) : detail = null,
        icon = null,
        glyph = StateGlyphKind.account,
-       action = 'Connect with Twitch',
+       action = null,
+       _standardAction = _connectWithTwitch,
        onAction = onConnect,
        actionGlyph = null,
        actionIcon = null,
@@ -99,6 +104,16 @@ class FeedStatusView extends StatelessWidget {
   /// A glyph in the disc.
   final StateGlyphKind? glyph;
   final String? action;
+
+  /// The action of [FeedStatusView.error] and [FeedStatusView.signIn], in
+  /// the language on screen (read in [build], [action] being null).
+  final String Function(AppLocalizations l)? _standardAction;
+
+  static String _tryAgain(AppLocalizations l) => l.commonTryAgain;
+
+  static String _connectWithTwitch(AppLocalizations l) =>
+      l.commonConnectWithTwitch;
+
   final VoidCallback? onAction;
   final StateGlyphKind? actionGlyph;
   final IconData? actionIcon;
@@ -112,7 +127,11 @@ class FeedStatusView extends StatelessWidget {
     final colors = FeedColors.of(context);
     final large = context.isLargeScreen;
     // Activity's empty state: a smaller disc and a second line.
-    final quiet = !signalOff && this.action == null && this.detail != null;
+    final quiet =
+        !signalOff &&
+        this.action == null &&
+        _standardAction == null &&
+        this.detail != null;
     final markSize = quiet ? 64.0 : (large ? 88.0 : 72.0);
     final Widget mark;
     if (signalOff) {
@@ -141,7 +160,7 @@ class FeedStatusView extends StatelessWidget {
               ),
       );
     }
-    final action = this.action;
+    final action = this.action ?? _standardAction?.call(context.l10n);
     final detail = this.detail;
     return Center(
       child: Padding(
@@ -151,8 +170,8 @@ class FeedStatusView extends StatelessWidget {
           spacing: quiet ? 12 : (large ? 18 : 16),
           children: [
             ExcludeSemantics(child: mark),
-            ConstrainedBox(
-              constraints: BoxConstraints(maxWidth: large ? 360 : 260),
+            _CappedWidth(
+              maxWidth: large ? 360 : 260,
               child: Text(
                 message,
                 textAlign: TextAlign.center,
@@ -172,8 +191,8 @@ class FeedStatusView extends StatelessWidget {
               ),
             ),
             if (detail != null)
-              ConstrainedBox(
-                constraints: const BoxConstraints(maxWidth: 280),
+              _CappedWidth(
+                maxWidth: 280,
                 child: Text(
                   detail,
                   textAlign: TextAlign.center,
@@ -199,6 +218,47 @@ class FeedStatusView extends StatelessWidget {
       ),
     );
   }
+}
+
+/// At most [maxWidth] wide, its height asked at that width too: a status
+/// filling what is left of a list (`SliverFillRemaining`) asks its height
+/// before laying it out, and a [ConstrainedBox] would answer for the whole
+/// width, one line where the text takes three (the status then overflows a
+/// short window).
+class _CappedWidth extends SingleChildRenderObjectWidget {
+  const _CappedWidth({required this.maxWidth, super.child});
+
+  final double maxWidth;
+
+  @override
+  _RenderCappedWidth createRenderObject(BuildContext context) =>
+      _RenderCappedWidth(maxWidth);
+
+  @override
+  void updateRenderObject(
+    BuildContext context,
+    _RenderCappedWidth renderObject,
+  ) => renderObject.maxWidth = maxWidth;
+}
+
+class _RenderCappedWidth extends RenderConstrainedBox {
+  _RenderCappedWidth(double maxWidth)
+    : super(additionalConstraints: BoxConstraints(maxWidth: maxWidth));
+
+  set maxWidth(double value) =>
+      additionalConstraints = BoxConstraints(maxWidth: value);
+
+  double _capped(double width) => width < additionalConstraints.maxWidth
+      ? width
+      : additionalConstraints.maxWidth;
+
+  @override
+  double computeMinIntrinsicHeight(double width) =>
+      super.computeMinIntrinsicHeight(_capped(width));
+
+  @override
+  double computeMaxIntrinsicHeight(double width) =>
+      super.computeMaxIntrinsicHeight(_capped(width));
 }
 
 /// The signal turned off: a ring, a disc, a dark dot.
@@ -291,6 +351,7 @@ class StatePill extends StatelessWidget {
         ),
         shape: const StadiumBorder(),
         textStyle: TextStyle(
+          fontFamily: OnsetTokens.bodyFamily,
           fontSize: compact ? 13 : 14,
           fontWeight: FontWeight.w600,
         ),
@@ -327,7 +388,11 @@ class _PrimaryPill extends StatelessWidget {
           backgroundColor: accent,
           foregroundColor: onFillColor(accent),
           shape: const StadiumBorder(),
-          textStyle: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700),
+          textStyle: const TextStyle(
+            fontFamily: OnsetTokens.bodyFamily,
+            fontSize: 15,
+            fontWeight: FontWeight.w700,
+          ),
         ),
         child: Text(label),
       ),
@@ -401,7 +466,7 @@ class InlineStatus extends StatelessWidget {
             ),
             if (onRetry != null)
               StatePill(
-                label: 'Try again',
+                label: context.l10n.commonTryAgain,
                 onPressed: onRetry,
                 glyph: StateGlyphKind.retry,
                 compact: true,

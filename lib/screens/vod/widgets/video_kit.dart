@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:onset/l10n/l10n.dart';
 import 'package:onset/screens/home/stream_list/stream_card_parts.dart';
 import 'package:onset/screens/home/top/categories/category_streams.dart';
 import 'package:onset/screens/vod/widgets/video_glyph.dart';
@@ -291,7 +292,7 @@ class VideoPaneNotice extends StatelessWidget {
                   tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                 ),
                 icon: const Icon(Icons.refresh_rounded, size: 17),
-                label: const Text('Try again'),
+                label: Text(context.l10n.commonTryAgain),
               ),
           ],
         ),
@@ -340,16 +341,24 @@ class VideoListEmpty extends StatelessWidget {
   const VideoListEmpty({
     super.key,
     required this.message,
-    this.hint = 'Pull down to check again.',
+    this.hint = defaultHint,
   });
 
   final String message;
+
+  /// The line under [message], none when null. [defaultHint] (the default)
+  /// stands for "Pull down to check again." in the language on screen.
   final String? hint;
+
+  /// Stands for the standard hint (a private-use character, never shown).
+  static const defaultHint = '\u{F8FF}';
 
   @override
   Widget build(BuildContext context) {
     final colors = FeedColors.of(context);
-    final hint = this.hint;
+    final hint = this.hint == defaultHint
+        ? context.l10n.videoListEmptyHint
+        : this.hint;
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 32),
       child: Column(

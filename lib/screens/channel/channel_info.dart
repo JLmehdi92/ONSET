@@ -3,7 +3,7 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_mobx/flutter_mobx.dart';
-import 'package:intl/intl.dart';
+import 'package:onset/l10n/l10n.dart';
 import 'package:onset/models/stream.dart';
 import 'package:onset/screens/channel/stores/channel_info_store.dart';
 import 'package:onset/screens/channel/video/player_controller.dart';
@@ -22,13 +22,17 @@ import 'package:onset/widgets/motion/reduce_motion.dart';
 import 'package:onset/widgets/profile_picture.dart';
 import 'package:onset/widgets/twitch_web_page.dart';
 
-/// "3 h 12" (or "45 min") since [startedAt]: the info row's short uptime.
-String shortUptime(Duration elapsed) {
-  if (elapsed.isNegative) return '0 min';
+/// "3 h 12" (or "45 min") since [startedAt]: the info row's short uptime,
+/// in [l]'s language.
+String shortUptime(Duration elapsed, AppLocalizations l) {
+  if (elapsed.isNegative) return l.channelUptimeMinutes(minutes: 0);
   final hours = elapsed.inHours;
   final minutes = elapsed.inMinutes % 60;
-  if (hours == 0) return '$minutes min';
-  return '$hours h ${minutes.toString().padLeft(2, '0')}';
+  if (hours == 0) return l.channelUptimeMinutes(minutes: minutes);
+  return l.channelUptimeHours(
+    hours: hours,
+    minutes: minutes.toString().padLeft(2, '0'),
+  );
 }
 
 /// Whether the viewer can follow or subscribe to [login] (signed in, not
@@ -109,7 +113,9 @@ class ChannelInfoRow extends StatelessWidget {
           );
           Widget metaLine;
           if (large) {
-            final title = live ? stream.title.trim() : 'Offline';
+            final title = live
+                ? stream.title.trim()
+                : context.l10n.streamOffline;
             metaLine = Row(
               children: [
                 Flexible(
@@ -126,24 +132,60 @@ class ChannelInfoRow extends StatelessWidget {
                 ],
               ],
             );
+          } else if (live) {
+            // The facts take the room a short category leaves (« Dota 2 ·
+            // 2 445 spectateurs · 3 h 12 »), and at least half the row
+            // beside a long one, which then gives way first.
+            metaLine = LayoutBuilder(
+              builder: (context, constraints) {
+                var room = constraints.maxWidth;
+                if (category.isNotEmpty && room.isFinite) {
+                  // Measured as the Text draws it (the app's font).
+                  final painter = TextPainter(
+                    text: TextSpan(
+                      text: category,
+                      style: DefaultTextStyle.of(context).style.merge(meta),
+                    ),
+                    textDirection: Directionality.of(context),
+                    textScaler: MediaQuery.textScalerOf(context),
+                    maxLines: 1,
+                  )..layout();
+                  room = math.max(
+                    room - painter.width.ceilToDouble(),
+                    room / 2,
+                  );
+                  painter.dispose();
+                }
+                return Row(
+                  children: [
+                    if (category.isNotEmpty)
+                      Flexible(child: categoryLink(category)),
+                    ConstrainedBox(
+                      constraints: BoxConstraints(maxWidth: room),
+                      child: _LiveFacts(
+                        prefix: category.isEmpty ? '' : ' · ',
+                        viewers: stream.viewerCount,
+                        startedAt: stream.startedAt,
+                        style: meta,
+                      ),
+                    ),
+                  ],
+                );
+              },
+            );
           } else {
             metaLine = Row(
               children: [
                 if (category.isNotEmpty)
                   Flexible(child: categoryLink(category)),
                 Flexible(
-                  child: live
-                      ? _LiveFacts(
-                          prefix: category.isEmpty ? '' : ' · ',
-                          viewers: stream.viewerCount,
-                          startedAt: stream.startedAt,
-                          style: meta,
-                        )
-                      : Text(
-                          category.isEmpty ? 'Offline' : ' · Offline',
-                          maxLines: 1,
-                          style: meta,
-                        ),
+                  child: Text(
+                    category.isEmpty
+                        ? context.l10n.streamOffline
+                        : ' · ${context.l10n.streamOffline}',
+                    maxLines: 1,
+                    style: meta,
+                  ),
                 ),
               ],
             );
@@ -169,7 +211,7 @@ class ChannelInfoRow extends StatelessWidget {
                 Expanded(
                   child: Semantics(
                     button: true,
-                    label: 'Channel profile',
+                    label: context.l10n.channelProfile,
                     child: GestureDetector(
                       behavior: HitTestBehavior.opaque,
                       onTap: onOpenProfile,
@@ -364,17 +406,62 @@ class _LiveFactsState extends State<_LiveFacts> {
 
   @override
   Widget build(BuildContext context) {
+    final l = context.l10n;
     final minutes = _minutes;
-    return Text(
-      [
-        '${widget.prefix}${NumberFormat.decimalPattern().format(widget.viewers)} watching',
-        if (minutes != null) shortUptime(Duration(minutes: minutes)),
-      ].join(' · '),
-      maxLines: 1,
-      overflow: TextOverflow.ellipsis,
-      style: OnsetType.tabular(widget.style),
+    final uptime = minutes == null
+        ? null
+        : shortUptime(Duration(minutes: minutes), l);
+    String line(String viewers) =>
+        [widget.prefix + viewers, ?uptime].join(' · ');
+    final full = line(l.streamWatching(count: widget.viewers));
+    final style = OnsetType.tabular(widget.style);
+    // Measured as the Text draws it, in the app's font.
+    final measured = DefaultTextStyle.of(context).style.merge(style);
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        // Beside the category on a phone the line can run out of room
+        // (French words run longer): it shrinks a little, then the number
+        // goes short (« 2,4 k spectateurs »), then stands alone, rather
+        // than lose its words to an ellipsis (« 2 445 spectate… »). A
+        // screen reader always hears it in full.
+        var shown = full;
+        if (constraints.hasBoundedWidth) {
+          final room = constraints.maxWidth / _minShrink;
+          final scaler = MediaQuery.textScalerOf(context);
+          final direction = Directionality.of(context);
+          final number = formatViewers(widget.viewers);
+          for (final candidate in [
+            full,
+            line(l.streamWatchingShort(count: widget.viewers, viewers: number)),
+            line(number),
+          ]) {
+            shown = candidate;
+            final painter = TextPainter(
+              text: TextSpan(text: candidate, style: measured),
+              textDirection: direction,
+              textScaler: scaler,
+              maxLines: 1,
+            )..layout();
+            final fits = painter.width <= room;
+            painter.dispose();
+            if (fits) break;
+          }
+        }
+        return Semantics(
+          label: full,
+          excludeSemantics: true,
+          child: FittedBox(
+            fit: BoxFit.scaleDown,
+            alignment: AlignmentDirectional.centerStart,
+            child: Text(shown, maxLines: 1, softWrap: false, style: style),
+          ),
+        );
+      },
     );
   }
+
+  /// How much the line may shrink before it says less.
+  static const _minShrink = 0.85;
 }
 
 /// A channel's picture, in the live ring when it streams (2 dp of ground,
@@ -461,8 +548,8 @@ class FollowButton extends StatelessWidget {
         );
         return Tooltip(
           message: follows
-              ? 'Following $name · opens twitch.tv'
-              : 'Follow $name on Twitch',
+              ? context.l10n.channelFollowingTooltip(name: name)
+              : context.l10n.channelFollowTooltip(name: name),
           child: PressScale(
             child: follows
                 ? OutlinedButton(
@@ -481,7 +568,7 @@ class FollowButton extends StatelessWidget {
                       shape: const StadiumBorder(),
                       textStyle: style,
                     ),
-                    child: const OneLineLabel('Following'),
+                    child: OneLineLabel(context.l10n.channelFollowing),
                   )
                 : FilledButton(
                     onPressed: () => _open(context),
@@ -495,7 +582,7 @@ class FollowButton extends StatelessWidget {
                       shape: const StadiumBorder(),
                       textStyle: style,
                     ),
-                    child: const OneLineLabel('Follow'),
+                    child: OneLineLabel(context.l10n.channelFollow),
                   ),
           ),
         );
@@ -526,11 +613,14 @@ class SubscribeButton extends StatelessWidget {
     if (url == null) return const SizedBox.shrink();
     final dark = Theme.of(context).brightness == Brightness.dark;
     return Tooltip(
-      message: 'Subscribe to $name · opens twitch.tv',
+      message: context.l10n.channelSubscribeTooltip(name: name),
       child: PressScale(
         child: OutlinedButton(
-          onPressed: () =>
-              TwitchWebPage.open(context, title: 'Subscribe', url: url),
+          onPressed: () => TwitchWebPage.open(
+            context,
+            title: context.l10n.channelSubscribe,
+            url: url,
+          ),
           style: OutlinedButton.styleFrom(
             foregroundColor: dark
                 ? OnsetTokens.hypeText
@@ -549,7 +639,7 @@ class SubscribeButton extends StatelessWidget {
               fontWeight: FontWeight.w600,
             ),
           ),
-          child: const OneLineLabel('Subscribe'),
+          child: OneLineLabel(context.l10n.channelSubscribe),
         ),
       ),
     );
@@ -658,7 +748,12 @@ class _TabletChannelPanelState extends State<TabletChannelPanel> {
                               ),
                             if (language != null) _Chip(label: language),
                             if (streak != null && streak > 0)
-                              _Chip(label: 'Watch streak $streak', green: true),
+                              _Chip(
+                                label: context.l10n.channelWatchStreak(
+                                  value: streak,
+                                ),
+                                green: true,
+                              ),
                           ],
                         ),
                       ],
@@ -705,6 +800,20 @@ class _Chip extends StatelessWidget {
   Widget build(BuildContext context) {
     final colors = FeedColors.of(context);
     final dark = Theme.of(context).brightness == Brightness.dark;
+    final text = Text(
+      label,
+      maxLines: 1,
+      // A category too long for a narrow column ends in an ellipsis.
+      overflow: green ? TextOverflow.visible : TextOverflow.ellipsis,
+      style: TextStyle(
+        fontSize: 12,
+        height: 1,
+        fontWeight: green ? FontWeight.w600 : FontWeight.w400,
+        color: green
+            ? (dark ? OnsetTokens.hypeText : OnsetTokens.hypeTextLight)
+            : colors.body,
+      ),
+    );
     final chip = Container(
       height: 24,
       padding: const EdgeInsets.symmetric(horizontal: 9),
@@ -715,18 +824,10 @@ class _Chip extends StatelessWidget {
             : (dark ? const Color(0xFF1A1A1A) : colors.raised),
         borderRadius: BorderRadius.circular(12),
       ),
-      child: Text(
-        label,
-        maxLines: 1,
-        style: TextStyle(
-          fontSize: 12,
-          height: 1,
-          fontWeight: green ? FontWeight.w600 : FontWeight.w400,
-          color: green
-              ? (dark ? OnsetTokens.hypeText : OnsetTokens.hypeTextLight)
-              : colors.body,
-        ),
-      ),
+      child: green
+          // The streak's number is all it says: it shrinks rather than go.
+          ? FittedBox(fit: BoxFit.scaleDown, child: text)
+          : text,
     );
     if (onTap == null) return chip;
     return Semantics(
@@ -758,7 +859,7 @@ class _AlsoLive extends StatelessWidget {
       spacing: 10,
       children: [
         Text(
-          'ALSO LIVE FROM YOUR FOLLOWS',
+          context.l10n.channelAlsoLive,
           style: TextStyle(
             fontSize: 11,
             fontWeight: FontWeight.w600,
@@ -893,7 +994,7 @@ class TabletChatHeader extends StatelessWidget {
         spacing: 10,
         children: [
           Text(
-            'Chat',
+            context.l10n.channelChat,
             style: TextStyle(
               fontSize: 15,
               fontWeight: FontWeight.w700,
@@ -904,9 +1005,9 @@ class TabletChatHeader extends StatelessWidget {
             builder: (context) {
               final delay = settings.chatDelay.round();
               final label = settings.autoSyncChatDelay
-                  ? 'synced to video'
+                  ? context.l10n.channelChatSynced
                   : delay > 0
-                  ? '${delay}s delay'
+                  ? context.l10n.channelChatDelay(seconds: delay)
                   : null;
               if (label == null) return const SizedBox.shrink();
               return Container(
@@ -944,7 +1045,7 @@ class TabletChatHeader extends StatelessWidget {
           ),
           const Spacer(),
           IconButton(
-            tooltip: 'Chat settings',
+            tooltip: context.l10n.channelChatSettings,
             onPressed: onMore,
             icon: PlayerGlyph(PlayerGlyphKind.more, color: colors.secondary),
           ),

@@ -3,6 +3,7 @@ import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
+import 'package:onset/l10n/l10n.dart';
 import 'package:onset/models/stream.dart';
 import 'package:onset/screens/channel/channel.dart';
 import 'package:onset/screens/home/top/categories/category_streams.dart';
@@ -87,10 +88,18 @@ abstract final class OverImage {
   static const pillStrong = Color(0xBF0A0A0A);
 }
 
-/// A viewer count as the cards show it: "2.4k" ([compact]) or "2,445".
-String formatViewers(int count, {bool compact = true}) => compact
-    ? NumberFormat.compact().format(count).toLowerCase()
-    : NumberFormat.decimalPattern().format(count);
+/// A viewer count as the cards show it: "2.4k" ([compact]) or "2,445", in
+/// the language on screen (`Intl.defaultLocale`).
+///
+/// Only English is lowered ("2.4K" is drawn "2.4k"): elsewhere the case is
+/// the unit's, French « 12,6 M » (million) and « 2 Md » (milliard) would
+/// read « m » (metre) and « md » lowered.
+String formatViewers(int count, {bool compact = true}) {
+  if (!compact) return NumberFormat.decimalPattern().format(count);
+  final format = NumberFormat.compact();
+  final text = format.format(count);
+  return format.locale.startsWith('en') ? text.toLowerCase() : text;
+}
 
 /// [stream]'s channel page.
 Route<void> streamRoute(StreamTwitch stream) => MaterialPageRoute(
@@ -216,8 +225,8 @@ class StreamThumbnail extends StatelessWidget {
     return Semantics(
       container: true,
       image: true,
-      label: '$name stream preview',
-      onLongPressHint: enlarge ? 'enlarge' : null,
+      label: context.l10n.streamPreviewSemantics(name: name),
+      onLongPressHint: enlarge ? context.l10n.streamEnlargeHint : null,
       child: enlarge
           ? GestureDetector(
               onLongPress: () => enlargeThumbnail(context, stream),
@@ -254,7 +263,7 @@ class LiveBadge extends StatelessWidget {
         children: [
           SignalPing(size: small ? 5 : 6, color: onAccent),
           Text(
-            'LIVE',
+            context.l10n.commonLiveBadge,
             style: OnsetType.badge.copyWith(
               fontSize: fontSize,
               letterSpacing: 0.06 * fontSize,
@@ -319,7 +328,7 @@ class ViewerPill extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Semantics(
-      label: '${formatViewers(viewers, compact: false)} viewers',
+      label: context.l10n.streamViewers(count: viewers),
       child: ExcludeSemantics(
         child: OverlayPill(
           height: height,
@@ -376,7 +385,7 @@ class StreakPill extends StatelessWidget {
   Widget build(BuildContext context) {
     final dark = overImage || Theme.of(context).brightness == Brightness.dark;
     return Semantics(
-      label: 'Watch streak $value',
+      label: context.l10n.streamWatchStreakSemantics(value: value),
       child: ExcludeSemantics(
         child: Container(
           height: height,
@@ -391,7 +400,7 @@ class StreakPill extends StatelessWidget {
             ),
           ),
           child: Text(
-            'Streak $value',
+            context.l10n.streamStreak(value: value),
             maxLines: 1,
             style: OnsetType.tabular(
               TextStyle(
@@ -493,10 +502,12 @@ class FeedSectionTitle extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.baseline,
           textBaseline: TextBaseline.alphabetic,
           children: [
+            // Two lines rather than losing words (a narrow shelf, large
+            // text).
             Flexible(
               child: Text(
                 title,
-                maxLines: 1,
+                maxLines: 2,
                 overflow: TextOverflow.ellipsis,
                 style: style.copyWith(color: colors.text),
               ),

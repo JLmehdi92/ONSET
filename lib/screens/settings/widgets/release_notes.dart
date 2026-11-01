@@ -2,6 +2,8 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:onset/l10n/enum_labels.dart';
+import 'package:onset/l10n/l10n.dart';
 import 'package:onset/screens/settings/widgets/release_notes_parts.dart';
 import 'package:onset/screens/settings/widgets/settings_kit.dart';
 import 'package:onset/screens/settings/widgets/settings_page.dart';
@@ -23,24 +25,51 @@ import 'package:onset/widgets/motion/staggered_entrance.dart';
 class ReleaseNotes extends StatefulWidget {
   static const routeName = 'ReleaseNotes';
 
-  /// Replaces the bundled notes in tests.
+  /// The English notes, the reference every translation follows.
+  static const englishAsset = 'assets/release-notes.md';
+
+  /// The French translation of [englishAsset], version for version.
+  static const frenchAsset = 'assets/release-notes.fr.md';
+
+  /// Replaces the bundled English notes in tests.
   static Future<String> Function()? debugSource;
 
-  /// The release notes' Markdown (assets/release-notes.md), or null when it
-  /// cannot be read. Never throws.
-  static Future<String?> read() async {
+  /// Replaces the bundled French notes in tests. While [debugSource] is set
+  /// and this is not, French reads as missing (the English stand-in is
+  /// used), so a test's notes are never mixed with the bundled ones.
+  static Future<String> Function()? debugFrenchSource;
+
+  /// The release notes' Markdown in the language of [locale] (English, the
+  /// reference, when none is given), or null when they cannot be read.
+  /// Notes missing in that language fall back to English. Never throws.
+  static Future<String?> read([Locale? locale]) async {
+    if (locale?.languageCode == 'fr') {
+      final french = await _readSource(
+        debugFrenchSource ??
+            (debugSource == null
+                ? () => rootBundle.loadString(frenchAsset)
+                : () async => throw StateError('no French test notes')),
+      );
+      if (french != null && french.trim().isNotEmpty) return french;
+    }
+    return _readSource(
+      debugSource ?? () => rootBundle.loadString(englishAsset),
+    );
+  }
+
+  static Future<String?> _readSource(Future<String> Function() source) async {
     try {
-      return await (debugSource ??
-          () => rootBundle.loadString('assets/release-notes.md'))();
+      return await source();
     } catch (e) {
       debugPrint('Release notes unreadable: ${e.runtimeType}');
       return null;
     }
   }
 
-  /// The release notes' Markdown; unreadable notes read as none (no
-  /// entries). Never throws.
-  static Future<String> load() async => await read() ?? '';
+  /// The release notes' Markdown in the language of [locale] (see [read]);
+  /// unreadable notes read as none (no entries). Never throws.
+  static Future<String> load([Locale? locale]) async =>
+      await read(locale) ?? '';
 
   const ReleaseNotes({super.key, this.updatedTo, this.updatedFrom});
 
@@ -74,18 +103,36 @@ class _ReleaseNotesState extends State<ReleaseNotes> {
 
   bool get _fresh => widget.updatedTo != null;
 
+  /// The language the notes were last read in.
+  Locale? _locale;
+
+  /// The latest read: an older one finishing after it is dropped.
+  var _reading = 0;
+
   @override
-  void initState() {
-    super.initState();
-    ReleaseNotes.load()
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final locale = Localizations.localeOf(context);
+    if (locale == _locale) return;
+    _locale = locale;
+    _load(locale);
+  }
+
+  /// Reads the notes in [locale]'s language (the versions are the same in
+  /// every language, so what is open or picked stays).
+  void _load(Locale locale) {
+    final read = ++_reading;
+    ReleaseNotes.load(locale)
         .then((markdown) {
-          if (!mounted) return;
+          if (!mounted || read != _reading) return;
           setState(() => _data = parseReleaseEntries(markdown));
         })
         // Defensive (load never throws): never leave the page loading.
         .catchError((Object e) {
           debugPrint('Release notes page: ${e.runtimeType}');
-          if (mounted) setState(() => _data = const ReleaseNotesData());
+          if (mounted && read == _reading) {
+            setState(() => _data = const ReleaseNotesData());
+          }
         });
   }
 
@@ -179,7 +226,11 @@ class _ReleaseNotesState extends State<ReleaseNotes> {
     } else {
       body = Builder(builder: (context) => _phoneNotes(context, data));
     }
-    return SettingsScaffold(title: 'Release notes', onBack: _close, body: body);
+    return SettingsScaffold(
+      title: context.l10n.settingsReleaseNotes,
+      onBack: _close,
+      body: body,
+    );
   }
 
   /// [context] is under SettingsScaffold: its padding includes the header.
@@ -213,9 +264,9 @@ class _ReleaseNotesState extends State<ReleaseNotes> {
           spacing: 14,
           children: [
             if (to == null)
-              const Padding(
-                padding: EdgeInsets.symmetric(horizontal: 4),
-                child: ReleaseEyebrow("WHAT'S NEW"),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 4),
+                child: ReleaseEyebrow(context.l10n.releaseNotesWhatsNew),
               ),
             ReleaseLatestCard(entries[featured], latest: featured == 0),
           ],
@@ -226,7 +277,9 @@ class _ReleaseNotesState extends State<ReleaseNotes> {
           step++,
           ReleaseEarlierVersions(
             // After an update the notes may hold a newer version too.
-            title: featured == 0 ? 'Earlier versions' : 'Other versions',
+            title: featured == 0
+                ? context.l10n.releaseNotesEarlierVersions
+                : context.l10n.releaseNotesOtherVersions,
             entries: entries,
             indexes: others,
             open: _open,
@@ -294,7 +347,7 @@ class _ReleaseNotesState extends State<ReleaseNotes> {
                 child: ConstrainedBox(
                   constraints: const BoxConstraints(maxWidth: 688),
                   child: ReleasePrimaryButton(
-                    label: 'Got it',
+                    label: context.l10n.releaseNotesGotIt,
                     onPressed: _close,
                   ),
                 ),
@@ -340,12 +393,16 @@ class _ReleaseNotesState extends State<ReleaseNotes> {
                   spacing: 4,
                   children: [
                     ReleaseEyebrow(
-                      to == null ? "WHAT'S NEW" : "WHAT'S NEW IN $to",
+                      to == null
+                          ? context.l10n.releaseNotesWhatsNew
+                          : context.l10n.releaseNotesWhatsNewIn(version: to),
                     ),
                     Semantics(
                       header: true,
                       child: Text(
-                        to == null ? 'Release notes' : 'Updated to $to',
+                        to == null
+                            ? context.l10n.settingsReleaseNotes
+                            : context.l10n.releaseNotesUpdatedTo(version: to),
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: TextStyle(
@@ -379,7 +436,7 @@ class _ReleaseNotesState extends State<ReleaseNotes> {
                           ),
                         ),
                       ReleasePrimaryButton(
-                        label: 'Got it',
+                        label: context.l10n.releaseNotesGotIt,
                         onPressed: _close,
                         height: 44,
                         fontSize: 14,
@@ -469,9 +526,9 @@ class _ReleaseNotesState extends State<ReleaseNotes> {
               ReleaseEntrySection(title: null, items: data.preamble),
             ),
           ),
-        const Padding(
-          padding: EdgeInsets.symmetric(horizontal: 12),
-          child: ReleaseListLabel('Versions'),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12),
+          child: ReleaseListLabel(context.l10n.releaseNotesVersions),
         ),
         const SizedBox(height: 10),
         for (final (i, version) in entries.indexed)
@@ -599,14 +656,129 @@ final class ReleaseParagraph extends ReleaseNotesBlock {
 
 final _platformTag = RegExp(r'^\[(iOS|Android)\]\s*');
 
-/// "January 9, 2026": the date under a version.
-final _date = RegExp(r'^[A-Z][a-z]+ \d{1,2}, \d{4}$');
+/// The spaces a date may be written with: a space, or the no-break ones
+/// French typography puts there.
+const _dateSpace = '[ \u00a0\u202f]';
+
+/// "January 9, 2026", or in French "9 janvier 2026" (and "1er janvier
+/// 2026"): the date under a version.
+final _date = RegExp(
+  '^(?:[A-Z][a-z]+ \\d{1,2}, \\d{4}'
+  '|(?:1er|\\d{1,2})$_dateSpace(?:${_frenchMonths.join('|')})$_dateSpace'
+  '\\d{4})\$',
+);
+
+/// The French months, as written in dates, January first.
+const _frenchMonths = [
+  'janvier',
+  'février',
+  'mars',
+  'avril',
+  'mai',
+  'juin',
+  'juillet',
+  'août',
+  'septembre',
+  'octobre',
+  'novembre',
+  'décembre',
+];
+
+/// The English months, as written in dates, January first.
+const _englishMonths = [
+  'January',
+  'February',
+  'March',
+  'April',
+  'May',
+  'June',
+  'July',
+  'August',
+  'September',
+  'October',
+  'November',
+  'December',
+];
+
+/// The day a version's [date] names ("October 29, 2026", "29 octobre
+/// 2026"), or null when it does not read as one.
+DateTime? releaseDay(String date) {
+  final english = RegExp(
+    r'^([A-Z][a-z]+) (\d{1,2}), (\d{4})$',
+  ).firstMatch(date);
+  final french = RegExp(
+    '^(1er|\\d{1,2})$_dateSpace(\\p{L}+)$_dateSpace(\\d{4})\$',
+    unicode: true,
+  ).firstMatch(_composed(date));
+  final (int? day, int month, int? year) = switch ((english, french)) {
+    (final m?, _) => (
+      int.tryParse(m[2]!),
+      _englishMonths.indexOf(m[1]!) + 1,
+      int.tryParse(m[3]!),
+    ),
+    (_, final m?) => (
+      m[1] == '1er' ? 1 : int.tryParse(m[1]!),
+      _frenchMonths.indexOf(m[2]!) + 1,
+      int.tryParse(m[3]!),
+    ),
+    _ => (null, 0, null),
+  };
+  if (day == null || year == null || month == 0) return null;
+  final result = DateTime(year, month, day);
+  // "February 31" is no day.
+  return result.month == month && result.day == day ? result : null;
+}
+
+/// [text] with the French letters an editor may write decomposed (an "e"
+/// then a combining accent, as some keyboards and macOS file names do)
+/// written as one character: what the parser and the screen expect.
+String _composed(String text) {
+  if (!text.contains(_combining)) return text;
+  return text.replaceAllMapped(
+    RegExp('([aeiouyAEIOUYcC])([\u0300\u0301\u0302\u0308\u0327])'),
+    (match) => _composedLetters[match[0]] ?? match[0]!,
+  );
+}
+
+final _combining = RegExp('[\u0300\u0301\u0302\u0308\u0327]');
+
+/// The letters French writes with an accent, decomposed to composed.
+const _composedLetters = {
+  'a\u0300': 'à',
+  'a\u0302': 'â',
+  'e\u0300': 'è',
+  'e\u0301': 'é',
+  'e\u0302': 'ê',
+  'e\u0308': 'ë',
+  'i\u0302': 'î',
+  'i\u0308': 'ï',
+  'o\u0302': 'ô',
+  'u\u0300': 'ù',
+  'u\u0302': 'û',
+  'u\u0308': 'ü',
+  'y\u0308': 'ÿ',
+  'c\u0327': 'ç',
+  'A\u0300': 'À',
+  'A\u0302': 'Â',
+  'E\u0300': 'È',
+  'E\u0301': 'É',
+  'E\u0302': 'Ê',
+  'E\u0308': 'Ë',
+  'I\u0302': 'Î',
+  'I\u0308': 'Ï',
+  'O\u0302': 'Ô',
+  'U\u0300': 'Ù',
+  'U\u0302': 'Û',
+  'U\u0308': 'Ü',
+  'Y\u0308': 'Ÿ',
+  'C\u0327': 'Ç',
+};
 
 /// Reads the release notes' Markdown (assets/release-notes.md): versions,
 /// their dates, sections, points, rules; anything else stays a paragraph.
 List<ReleaseNotesBlock> parseReleaseNotes(String markdown) {
   final blocks = <ReleaseNotesBlock>[];
-  final lines = markdown.split(RegExp(r'\r?\n'));
+  final lines = _composed(markdown).split(RegExp(r'\r?\n'));
   for (var i = 0; i < lines.length; i++) {
     final raw = lines[i];
     final line = raw.trim();
@@ -658,31 +830,57 @@ List<ReleaseNotesBlock> parseReleaseNotes(String markdown) {
 }
 
 /// What a section is about, read from its name: its glyph and how its
-/// points are counted ("2 new · 3 improvements · 1 fix").
+/// points are counted ("2 new · 3 improvements · 1 fix", named in
+/// lib/l10n/enum_labels.dart).
 enum ReleaseSectionKind {
-  added('new', 'new'),
-  improved('improvement', 'improvements'),
-  fixed('fix', 'fixes'),
-  other('change', 'changes');
-
-  const ReleaseSectionKind(this.one, this.many);
-
-  final String one;
-  final String many;
+  added,
+  improved,
+  fixed,
+  other;
 
   /// "Bug Fixes", "Bugfixes", "New", "Features", "Improvements",
   /// "Changed"…, in any case (a fix first: "Fixes for the new player");
-  /// any other name (or none) is [other].
+  /// any other name (or none) is [other]. A French name reads as the
+  /// English it translates: "Corrections", "Bogues corrigés" (fixed),
+  /// "Nouveautés", "Fonctionnalités", "Ajouts" (added), "Améliorations",
+  /// "Changements", "Modifications" (improved, as "Changed" is), a
+  /// correction first too ("Améliorations et corrections" is fixed, as
+  /// "Improvements and fixes" is).
   static ReleaseSectionKind of(String? title) {
     final name = title?.trim().toLowerCase() ?? '';
-    if (name.contains('fix')) return fixed;
-    if (_added.hasMatch(name)) return added;
-    if (_improved.hasMatch(name)) return improved;
+    if (_fixed.hasMatch(name) || _frenchFixed.hasMatch(name)) return fixed;
+    if (_added.hasMatch(name) || _frenchAdded.hasMatch(name)) return added;
+    if (_improved.hasMatch(name) || _frenchImproved.hasMatch(name)) {
+      return improved;
+    }
     return other;
   }
 
+  /// A whole English word: "Fix", "Fixes", "Fixed", "Fixing", "Fixups",
+  /// "Bugfixes", "Hotfix", "Corrections", not "Prefixes" (nor the French
+  /// « Préfixes »).
+  static final _fixed = RegExp(
+    r'(?<!\p{L})(?:(?:bug|hot)?fix(?:es|ed|ing|ups?)?|corrections?)(?!\p{L})',
+    unicode: true,
+  );
   static final _added = RegExp(r'\b(new|features?|added)\b');
   static final _improved = RegExp(r'\b(improvements?|improved|changed)\b');
+
+  /// A whole French word: "Correctifs", not "Incorrects".
+  static RegExp _frenchWords(String words) =>
+      RegExp('(?<![\\p{L}\\p{N}])($words)(?![\\p{L}\\p{N}])', unicode: true);
+
+  static final _frenchFixed = _frenchWords(
+    r'corrections?|correctifs?|corrigé(?:e|s|es)?',
+  );
+  static final _frenchAdded = _frenchWords(
+    r'nouveautés?|nouveaux?|nouvelles?|fonctionnalités?|ajouts?'
+    r'|ajouté(?:e|s|es)?',
+  );
+  static final _frenchImproved = _frenchWords(
+    r'améliorations?|amélioré(?:e|s|es)?|changements?|modifications?'
+    r'|modifié(?:e|s|es)?',
+  );
 }
 
 /// A section of one version, with its points and paragraphs.
@@ -713,7 +911,15 @@ final class ReleaseEntry {
 
   /// As written after "## ", without its "v": "1.1.0".
   final String version;
+
+  /// As written under the version: "October 29, 2026".
   final String? date;
+
+  /// The day [date] names, null when it reads as none.
+  late final DateTime? day = switch (date) {
+    final date? => releaseDay(date),
+    null => null,
+  };
 
   /// The paragraphs before its first section.
   final List<String> notes;
@@ -728,11 +934,10 @@ final class ReleaseEntry {
   /// "ONSET 1.1.0".
   String get name => _numbered ? 'ONSET $version' : version;
 
-  /// "2 new · 3 improvements · 1 fix": its points by kind, empty without
-  /// any. Read once.
-  late final String summary = _summary();
+  /// Its points by kind (counted once), the kinds without any left out.
+  late final Map<ReleaseSectionKind, int> counts = _counts();
 
-  String _summary() {
+  Map<ReleaseSectionKind, int> _counts() {
     final counts = <ReleaseSectionKind, int>{};
     for (final section in sections) {
       counts.update(
@@ -741,12 +946,16 @@ final class ReleaseEntry {
         ifAbsent: () => section.count,
       );
     }
-    return [
-      for (final kind in ReleaseSectionKind.values)
-        if ((counts[kind] ?? 0) > 0)
-          '${counts[kind]} ${counts[kind] == 1 ? kind.one : kind.many}',
-    ].join(' · ');
+    counts.removeWhere((_, count) => count <= 0);
+    return counts;
   }
+
+  /// "2 new · 3 improvements · 1 fix": its points by kind, empty without
+  /// any.
+  String summary(AppLocalizations l) => [
+    for (final kind in ReleaseSectionKind.values)
+      if (counts[kind] case final count?) kind.count(l, count),
+  ].join(' · ');
 }
 
 /// The notes read as versions ([entries], newest first) and anything

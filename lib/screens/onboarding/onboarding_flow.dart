@@ -1,10 +1,12 @@
 import 'dart:async';
+import 'dart:math' as math;
 import 'dart:ui' show lerpDouble;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_mobx/flutter_mobx.dart';
 import 'package:onset/apis/twitch_api.dart';
+import 'package:onset/l10n/l10n.dart';
 import 'package:onset/models/stream.dart';
 import 'package:onset/screens/home/home.dart';
 import 'package:onset/screens/onboarding/login_webview.dart';
@@ -410,8 +412,9 @@ class _OnboardingFlowState extends State<OnboardingFlow>
     return Observer(
       builder: (context) {
         final accent = Color(_settings.accentColor);
+        final theme = OnsetThemes(colorSchemeSeed: accent).dark;
         return Theme(
-          data: OnsetThemes(colorSchemeSeed: accent).dark,
+          data: theme,
           child: AnnotatedRegion<SystemUiOverlayStyle>(
             value: onboardingBars,
             child: PopScope(
@@ -421,7 +424,7 @@ class _OnboardingFlowState extends State<OnboardingFlow>
               },
               child: Material(
                 color: OnboardingColors.ground,
-                child: _layout(context, accent),
+                child: _layout(context, accent, theme.textTheme.bodyMedium),
               ),
             ),
           ),
@@ -430,18 +433,37 @@ class _OnboardingFlowState extends State<OnboardingFlow>
     );
   }
 
-  Widget _layout(BuildContext context, Color accent) {
+  /// [body] is the text style the steps inherit (the Material's), which
+  /// the phone's Intro description is measured in.
+  Widget _layout(BuildContext context, Color accent, TextStyle? body) {
     final size = MediaQuery.sizeOf(context);
     final padding = MediaQuery.paddingOf(context);
+    final textScaler = MediaQuery.textScalerOf(context);
     final geometry = _Geometry.of(
       size,
       padding,
       nameHeight:
-          MediaQuery.textScalerOf(context).scale(
+          textScaler.scale(
                 OnsetWordmark.letterSize(tablet: isLargeScreenSize(size)),
               ) *
               1.2 +
           14,
+      nameWidth: OnsetWordmark.widthFor(
+        textScaler,
+        tablet: isLargeScreenSize(size),
+      ),
+      // The tallest of the languages: a tap on the language pill changes
+      // the description, and must not move the tile.
+      descriptionRoom: (width) => [
+        for (final locale in AppLocalizations.supportedLocales)
+          OnboardingIntroPhone.descriptionRoom(
+            lookupAppLocalizations(locale).onboardingIntroDescription,
+            body: body,
+            textScaler: textScaler,
+            width: width,
+          ),
+      ].reduce(math.max),
+      textScaler: textScaler,
     );
     final tablet = geometry.tablet;
 
@@ -521,7 +543,7 @@ class _OnboardingFlowState extends State<OnboardingFlow>
         )!;
         final tileScale = lerpDouble(
           launch.width / OnsetMark.designSize,
-          1,
+          geometry.tileScale,
           slide,
         )!;
         final nameCenterX = lerpDouble(
@@ -540,10 +562,20 @@ class _OnboardingFlowState extends State<OnboardingFlow>
         final (introOpacity, introShift) = _stepMotion(OnboardingStep.intro);
         final brandOpacity = tablet ? 1.0 : introOpacity;
         final brandShift = tablet ? 0.0 : introShift;
+        // From where the launch intro left the name to under the tile at
+        // rest (closer, under a smaller tile, on a short phone window).
         final nameTop =
             tileCenter.dy +
-            OnsetMark.designSize / 2 +
-            OnsetWordmark.gapBelowTile(tablet: tablet);
+            lerpDouble(
+              OnsetMark.designSize / 2,
+              OnsetMark.designSize / 2 * geometry.tileScale,
+              slide,
+            )! +
+            lerpDouble(
+              OnsetWordmark.gapBelowTile(tablet: tablet),
+              geometry.tileGap,
+              slide,
+            )!;
 
         final brand = Visibility(
           visible: brandOpacity > 0,
@@ -643,12 +675,15 @@ class _OnboardingFlowState extends State<OnboardingFlow>
     );
   }
 
+  /// The Intro's parts by order; the language pill (order 5) comes in
+  /// right after the description.
   static const _phoneIntroDelays = [
     Duration.zero,
     Duration(milliseconds: 340),
     Duration(milliseconds: 420),
     Duration(milliseconds: 500),
     Duration(milliseconds: 560),
+    Duration(milliseconds: 460),
   ];
 
   static const _tabletIntroDelays = [
@@ -657,7 +692,20 @@ class _OnboardingFlowState extends State<OnboardingFlow>
     Duration(milliseconds: 690),
     Duration(milliseconds: 760),
     Duration(milliseconds: 830),
+    Duration(milliseconds: 760),
   ];
+
+  /// The language the Intro's pill shows: the one picked, else the
+  /// device's.
+  AppLanguage get _language => resolveAppLanguage(
+    _settings.appLanguage,
+    WidgetsBinding.instance.platformDispatcher.locales,
+  );
+
+  /// A tap on the pill: the onboarding (and the app) switches language at
+  /// once.
+  void _chooseLanguage(AppLanguage language) =>
+      _settings.chooseLanguage(language);
 
   Widget _stepContent(
     OnboardingStep step,
@@ -666,21 +714,34 @@ class _OnboardingFlowState extends State<OnboardingFlow>
     Color accent,
   ) {
     final tablet = geometry.tablet;
-    void next() => _go(OnboardingStep.login, forward: true);
+    final language = _language;
+    void next() {
+      // Chosen for good, even without a tap: a new install never gets the
+      // one-time question Home asks older ones.
+      _settings.chooseLanguage(language);
+      _go(OnboardingStep.login, forward: true);
+    }
+
     switch (step) {
       case OnboardingStep.intro:
         if (tablet) {
           return OnboardingIntroTablet(
             layout: layout,
             accent: accent,
+            language: language,
+            onLanguage: _chooseLanguage,
             onNext: next,
           );
         }
         return OnboardingIntroPhone(
           nameBottom: geometry.nameBottom,
+          fit: geometry.introFit,
+          column: geometry.introColumn,
           version: _version,
           accent: accent,
           bottomInset: geometry.bottomInset,
+          language: language,
+          onLanguage: _chooseLanguage,
           onNext: next,
         );
       case OnboardingStep.login:
@@ -758,32 +819,64 @@ class _Geometry {
     required this.barSide,
     required this.stepPadding,
     required this.tileCenter,
+    required this.tileScale,
+    required this.tileGap,
+    required this.introFit,
+    this.introColumn,
     required this.nameBottom,
     required this.webTop,
     required this.bottomInset,
   });
 
+  /// [descriptionRoom] is the room the phone Intro's description needs in
+  /// a given width (OnboardingIntroPhone.descriptionRoom).
   factory _Geometry.of(
     Size size,
     EdgeInsets padding, {
     required double nameHeight,
+    required double nameWidth,
+    required double Function(double width) descriptionRoom,
+    required TextScaler textScaler,
   }) {
     final w = size.width;
     final h = size.height;
     final tablet = isLargeScreenSize(size);
     const half = OnsetMark.designSize / 2;
+    if (!tablet && w > h) {
+      return _Geometry._phoneLandscape(
+        size,
+        padding,
+        nameHeight: nameHeight,
+        nameWidth: nameWidth,
+        descriptionRoom: descriptionRoom,
+        textScaler: textScaler,
+      );
+    }
     if (!tablet) {
+      final descriptionHeight = descriptionRoom(
+        w - 2 * OnboardingIntroPhone.descriptionSide,
+      );
       // The tile in the middle (where the launch intro left it), raised on
-      // a short window so the description, the version and "Next" fit.
-      final gap = OnsetWordmark.gapBelowTile(tablet: false);
+      // a short window so the description, the language pill, the version
+      // and "Next" fit; on a shorter one still, the parts draw closer and
+      // the tile shrinks (IntroPhoneFit).
+      final top = padding.top + 56 + 8;
+      final nextTop = h - padding.bottom - OnboardingIntroPhone.aboveNext;
+      final fit = IntroPhoneFit.of(
+        room: nextTop - top,
+        nameHeight: nameHeight,
+        descriptionRoom: descriptionHeight,
+        textScaler: textScaler,
+      );
+      final tileHalf = half * fit.tileScale;
+      final gap = fit.tileGap;
       final lowest =
-          h -
-          padding.bottom -
-          OnboardingIntroPhone.neededBelowName -
+          nextTop -
+          fit.belowName(descriptionHeight, textScaler) -
           nameHeight -
           gap -
-          half;
-      final highest = padding.top + 56 + half + 8;
+          tileHalf;
+      final highest = top + tileHalf;
       final cy = (h / 2).clamp(highest, lowest < highest ? highest : lowest);
       final full = Offset.zero & size;
       return _Geometry(
@@ -802,7 +895,10 @@ class _Geometry {
           padding.bottom + 20,
         ),
         tileCenter: Offset(w / 2, cy),
-        nameBottom: cy + half + gap + nameHeight,
+        tileScale: fit.tileScale,
+        tileGap: gap,
+        introFit: fit,
+        nameBottom: cy + tileHalf + gap + nameHeight,
         webTop: padding.top + 56,
         bottomInset: padding.bottom,
       );
@@ -828,6 +924,9 @@ class _Geometry {
           padding.bottom + 40,
         ),
         tileCenter: Offset(pane / 2, h / 2),
+        tileScale: 1,
+        tileGap: OnsetWordmark.gapBelowTile(tablet: true),
+        introFit: IntroPhoneFit.roomy,
         nameBottom: 0,
         webTop: padding.top + 72,
         bottomInset: padding.bottom,
@@ -848,8 +947,96 @@ class _Geometry {
       barSide: 28,
       stepPadding: EdgeInsets.fromLTRB(64, 104, 64, padding.bottom + 40),
       tileCenter: Offset(w / 2, groupTop + half),
+      tileScale: 1,
+      tileGap: gap,
+      introFit: IntroPhoneFit.roomy,
       nameBottom: 0,
       webTop: 72,
+      bottomInset: padding.bottom,
+    );
+  }
+
+  /// A phone held sideways (split screen, a freeform or desktop window):
+  /// one column cannot hold the Intro, so the tile and the name sit in the
+  /// middle of the left part and the description, the language pill, the
+  /// version and "Next" in a column on the right ([introColumn]). The tile
+  /// shrinks only if the left part is too short for it and the name; the
+  /// column loses its decoration as the portrait one does
+  /// ([IntroPhoneFit.ofColumn]), the description scrolling last.
+  factory _Geometry._phoneLandscape(
+    Size size,
+    EdgeInsets padding, {
+    required double nameHeight,
+    required double nameWidth,
+    required double Function(double width) descriptionRoom,
+    required TextScaler textScaler,
+  }) {
+    final w = size.width;
+    final h = size.height;
+    final top = padding.top + 56 + 8;
+    final usable = w - padding.left - padding.right;
+    // Wide enough for the name, but never more than half the window.
+    final brandWidth = math.min(
+      math.max(usable * 0.42, nameWidth + 48),
+      usable * 0.5,
+    );
+    final columnLeft = padding.left + brandWidth;
+    final columnRight = padding.right + 16;
+    final columnWidth = w - columnLeft - columnRight;
+
+    // The tile and the name, centred in the left part under the bar.
+    final room = h - padding.bottom - 16 - top;
+    const tileSize = IntroPhoneFit.tileSize;
+    final gap = tileSize + IntroPhoneFit.roomy.tileGap + nameHeight <= room
+        ? IntroPhoneFit.roomy.tileGap
+        : IntroPhoneFit.tight.tileGap;
+    final tileScale = ((room - gap - nameHeight) / tileSize).clamp(
+      IntroPhoneFit.minTileScale,
+      1.0,
+    );
+    final tileHalf = tileSize * tileScale / 2;
+    final group = 2 * tileHalf + gap + nameHeight;
+    final groupTop = top + math.max(0.0, (room - group) / 2);
+    final cy = groupTop + tileHalf;
+
+    final fit = IntroPhoneFit.ofColumn(
+      room: h - padding.bottom - OnboardingIntroPhone.aboveNext - top,
+      descriptionRoom: descriptionRoom(
+        columnWidth - 2 * IntroColumn.descriptionSide,
+      ),
+      textScaler: textScaler,
+      tileScale: tileScale,
+      tileGap: gap,
+    );
+    final full = Offset.zero & size;
+    return _Geometry(
+      tablet: false,
+      // (A tablet's landscape panes; a phone keeps its one brand area.)
+      landscape: false,
+      brand: full,
+      mosaic: Rect.fromLTWH(0, 0, w, h * 0.52 < 440 ? h * 0.52 : 440),
+      divider: Rect.zero,
+      steps: full,
+      bar: Rect.fromLTWH(0, padding.top, w, 56),
+      barSide: 6,
+      stepPadding: EdgeInsets.fromLTRB(
+        24,
+        padding.top + 68,
+        24,
+        padding.bottom + 20,
+      ),
+      tileCenter: Offset(padding.left + brandWidth / 2, cy),
+      tileScale: tileScale,
+      tileGap: gap,
+      introFit: fit,
+      introColumn: IntroColumn(
+        left: columnLeft,
+        right: columnRight,
+        top: top,
+        width: columnWidth,
+      ),
+      nameBottom: cy + tileHalf + gap + nameHeight,
+      webTop: padding.top + 56,
       bottomInset: padding.bottom,
     );
   }
@@ -872,6 +1059,19 @@ class _Geometry {
 
   /// The tile at rest.
   final Offset tileCenter;
+
+  /// The tile's scale at rest: 1, less on a short phone window.
+  final double tileScale;
+
+  /// From the tile's bottom to the name's top, at rest.
+  final double tileGap;
+
+  /// A phone's: how its Intro fits the window.
+  final IntroPhoneFit introFit;
+
+  /// A phone's on a landscape window: the column of its Intro beside the
+  /// tile and the name (null in portrait).
+  final IntroColumn? introColumn;
 
   /// A phone's: where the name's underline ends.
   final double nameBottom;
@@ -916,7 +1116,7 @@ class _TopBar extends StatelessWidget {
               opacity: hasBack ? 1 : 0,
               child: OnboardingIconButton(
                 glyph: OnboardingGlyphKind.chevronLeft,
-                tooltip: 'Back',
+                tooltip: context.l10n.commonBack,
                 onPressed: onBack,
               ),
             ),
@@ -952,8 +1152,8 @@ class _Progress extends StatelessWidget {
   Widget build(BuildContext context) {
     final width = motionDuration(context, const Duration(milliseconds: 360));
     return Semantics(
-      label: 'Onboarding progress',
-      value: 'Step ${index + 1} of 4',
+      label: context.l10n.onboardingProgressLabel,
+      value: context.l10n.onboardingProgressValue(step: index + 1, count: 4),
       excludeSemantics: true,
       child: Row(
         mainAxisSize: MainAxisSize.min,

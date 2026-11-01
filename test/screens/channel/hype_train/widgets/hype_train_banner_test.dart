@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:onset/apis/twitch_hype_train_service.dart';
+import 'package:onset/l10n/l10n.dart';
 import 'package:onset/models/hype_train.dart';
 import 'package:onset/screens/channel/hype_train/widgets/hype_train_banner.dart';
 import 'package:onset/screens/channel/hype_train/widgets/hype_train_copy.dart';
@@ -10,6 +11,7 @@ import 'package:onset/screens/channel/hype_train/widgets/hype_train_palette.dart
 import 'package:onset/screens/channel/hype_train/widgets/hype_train_progress_bar.dart';
 import 'package:onset/screens/channel/hype_train/widgets/hype_train_split_color.dart';
 
+import '../../../../helpers/l10n.dart' show ellipsizedTexts;
 import 'hype_train_widget_harness.dart';
 
 const _step = 'ht-step-';
@@ -110,7 +112,7 @@ void main() {
 
     await tester.pump(const Duration(milliseconds: 800));
     expect(stepKey('levelComplete'), findsOneWidget);
-    expect(find.text('Level 2 Complete!'), findsOneWidget);
+    expect(find.text('Level 2 complete!'), findsOneWidget);
 
     await tester.pump(const Duration(milliseconds: 500));
     await tester.pump(const Duration(milliseconds: 600));
@@ -146,7 +148,7 @@ void main() {
 
     expect(stepKey('marquee'), findsOneWidget);
     expect(find.byKey(const ValueKey('ht-marquee')), findsNothing);
-    expect(find.textContaining(HtCopy.levelUp), findsWidgets);
+    expect(find.textContaining(HtCopy(L10n.english).levelUp), findsWidgets);
     await h.close(tester);
   });
 
@@ -169,7 +171,7 @@ void main() {
     // Past the first frame of the cross-fade (opacity 0 hides semantics).
     await tester.pump(const Duration(milliseconds: 200));
     expect(
-      tester.getSemantics(find.text('Level 2 Complete!')),
+      tester.getSemantics(find.text('Level 2 complete!')),
       containsSemantics(isLiveRegion: true),
     );
 
@@ -231,10 +233,12 @@ void main() {
     );
 
     testWidgets(
-      'the banner is 74 dp tall',
+      'the banner is 74 dp tall when its subtitle fits one line',
       (tester) async {
+        // Wide enough for the test font's wide letters to keep the
+        // subtitle on one line: on two, the banner grows to show them.
         final h = running(tester);
-        await pumpSlot(tester, h.store);
+        await pumpSlot(tester, h.store, width: 600);
 
         expect(tester.getSize(_banner).height, 74);
         expect(tester.takeException(), isNull);
@@ -397,7 +401,7 @@ void main() {
       await h.close(tester);
     });
 
-    testWidgets('compact: no title, the train name as one line', (
+    testWidgets('compact: no title, the train name as its line, every word', (
       tester,
     ) async {
       final h = running(tester);
@@ -415,8 +419,15 @@ void main() {
         find.byKey(const ValueKey('ht-subtitle')),
       );
       expect(subtitle.data, 'Hype Train');
-      expect(subtitle.maxLines, 1);
-      expect(tester.getSize(_banner).height, lessThan(74));
+      // Shrunk, then wrapped on a narrow banner, never cut.
+      expect(subtitle.maxLines, lessThanOrEqualTo(2));
+      expect(
+        ellipsizedTexts(
+          tester,
+          within: find.byKey(const ValueKey('ht-subtitle')),
+        ),
+        isEmpty,
+      );
       await h.close(tester);
     });
 
@@ -439,8 +450,10 @@ void main() {
       );
       expect(find.byType(HypeTrainLevelPill), findsNothing);
       expect(find.byKey(const ValueKey('ht-title')), findsNothing);
-      expect(find.text(HtCopy.athApproaching), findsOneWidget);
-      expect(tester.getSize(_banner).height, 74);
+      expect(find.text(HtCopy(L10n.english).athApproaching), findsOneWidget);
+      // At least the 74 dp base, taller when the line wraps (every word
+      // in the app's font: hype_train_banner_fit_test).
+      expect(tester.getSize(_banner).height, greaterThanOrEqualTo(74));
       await h.close(tester);
     });
 
@@ -531,13 +544,13 @@ void main() {
       final banner = tester.getRect(_banner);
 
       expect(marqueeX(tester), closeTo(banner.width, 40));
-      final text = tester.widget<Text>(find.text(HtCopy.levelUp));
+      final text = tester.widget<Text>(find.text(HtCopy(L10n.english).levelUp));
       expect(text.style?.fontSize, 24);
       expect(text.style?.fontWeight, FontWeight.w700);
       await h.close(tester);
     });
 
-    testWidgets('"Level 2 Complete!" is centred at 24 sp', (tester) async {
+    testWidgets('"Level 2 complete!" is centred at 24 sp', (tester) async {
       final h = running(tester, level: 2);
       await pumpSlot(tester, h.store);
 
@@ -545,7 +558,7 @@ void main() {
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 3300));
       await tester.pump(const Duration(milliseconds: 200));
-      final complete = find.text('Level 2 Complete!');
+      final complete = find.text('Level 2 complete!');
 
       expect(tester.widget<Text>(complete).style?.fontSize, 24);
       expect(
@@ -581,13 +594,13 @@ void main() {
       expect(
         find.descendant(
           of: small,
-          matching: find.text('Viewer_1 just gifted 50 Tier 1 Subs!'),
+          matching: find.text('Viewer_1 just gifted 50 Tier 1 subs!'),
         ),
         findsOneWidget,
       );
       expect(
         tester
-            .widget<Text>(find.text('Viewer_1 just gifted 50 Tier 1 Subs!'))
+            .widget<Text>(find.text('Viewer_1 just gifted 50 Tier 1 subs!'))
             .style
             ?.fontSize,
         13,
@@ -604,7 +617,7 @@ void main() {
       await tester.pump(const Duration(milliseconds: 600));
 
       expect(
-        tester.widget<Text>(find.text('Level 2 Complete!')).style?.fontSize,
+        tester.widget<Text>(find.text('Level 2 complete!')).style?.fontSize,
         18,
       );
       expect(tester.takeException(), isNull);
@@ -704,7 +717,7 @@ void main() {
     });
 
     testWidgets('level up: 100 % in 200 ms, a flash with "Level n '
-        'Complete!", the colour morphs in 600 ms, the bar restarts', (
+        'complete!", the colour morphs in 600 ms, the bar restarts', (
       tester,
     ) async {
       final h = running(tester, level: 2);
@@ -717,10 +730,10 @@ void main() {
       expect(bar(tester).value, closeTo(1, 0.001));
       expect(find.byKey(const ValueKey('ht-flash')), findsNothing);
 
-      // Flash 500 ms, then the marquee 2.5 s: "Level 2 Complete!".
+      // Flash 500 ms, then the marquee 2.5 s: "Level 2 complete!".
       await tester.pump(const Duration(milliseconds: 500));
       await tester.pump(const Duration(milliseconds: 2500));
-      expect(find.text('Level 2 Complete!'), findsOneWidget);
+      expect(find.text('Level 2 complete!'), findsOneWidget);
       await tester.pump(const Duration(milliseconds: 1));
       final flash = tester.widget<ColoredBox>(
         find.byKey(const ValueKey('ht-flash')),
@@ -772,9 +785,9 @@ void main() {
       for (var t = 0; t < 40; t++) {
         await tester.pump(const Duration(milliseconds: 100));
         expect(find.byKey(const ValueKey('ht-flash')), findsNothing);
-        if (find.text('Level 2 Complete!').evaluate().isNotEmpty) break;
+        if (find.text('Level 2 complete!').evaluate().isNotEmpty) break;
       }
-      expect(find.text('Level 2 Complete!'), findsOneWidget);
+      expect(find.text('Level 2 complete!'), findsOneWidget);
       await tester.pump(const Duration(milliseconds: 100));
       expect(bar(tester).morphValue, inExclusiveRange(0.3, 0.7));
       await tester.pump(const Duration(milliseconds: 100));

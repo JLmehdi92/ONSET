@@ -1,6 +1,10 @@
+import 'dart:math' as math;
+
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_mobx/flutter_mobx.dart';
+import 'package:onset/l10n/enum_labels.dart';
+import 'package:onset/l10n/l10n.dart';
 import 'package:onset/models/stream.dart';
 import 'package:onset/screens/home/stream_list/stream_card_parts.dart';
 import 'package:onset/screens/onboarding/onboarding_accent_picker.dart';
@@ -82,6 +86,7 @@ class _OnboardingSetupStepState extends State<OnboardingSetupStep> {
     final tablet = widget.layout.tablet;
     final settings = widget.settings;
     final accent = widget.accent;
+    final l = context.l10n;
     return OnboardingStepFrame(
       layout: widget.layout,
       content: [
@@ -89,15 +94,17 @@ class _OnboardingSetupStepState extends State<OnboardingSetupStep> {
           order: 1,
           child: Semantics(
             header: true,
-            child: Text('Setup', style: OnboardingType.title(tablet: tablet)),
+            child: Text(
+              l.onboardingSetupTitle,
+              style: OnboardingType.title(tablet: tablet),
+            ),
           ),
         ),
         SizedBox(height: tablet ? 12 : 10),
         StepRise(
           order: 2,
           child: Text(
-            'Let’s tweak some settings before you get started. You can '
-            'always change these and more later.',
+            l.onboardingSetupLead,
             style: OnboardingType.lead(tablet: tablet),
           ),
         ),
@@ -161,29 +168,25 @@ class _OnboardingSetupStepState extends State<OnboardingSetupStep> {
                   ),
                   _Divided(
                     child: _SwitchRow(
-                      title: 'Fallback chat history (third-party)',
+                      title: l.onboardingSetupHistoryTitle,
                       accent: accent,
                       detail: Text.rich(
                         TextSpan(
-                          text:
-                              'When Twitch\'s own chat history is '
-                              'unavailable, fails or is empty, loads recent '
-                              'messages from ',
-                          children: [
-                            TextSpan(
-                              text: 'recent-messages.robotty.de',
-                              recognizer: _robottyLink,
-                              semanticsLabel: _robotty,
-                              style: TextStyle(
-                                color: OnboardingColors.text,
-                                decoration: TextDecoration.underline,
-                                decorationColor: accent,
+                          children: l10nSpans(
+                            l.onboardingSetupHistoryDetail(link: l10nMark(0)),
+                            [
+                              TextSpan(
+                                text: 'recent-messages.robotty.de',
+                                recognizer: _robottyLink,
+                                semanticsLabel: _robotty,
+                                style: TextStyle(
+                                  color: OnboardingColors.text,
+                                  decoration: TextDecoration.underline,
+                                  decorationColor: accent,
+                                ),
                               ),
-                            ),
-                            const TextSpan(
-                              text: ', which then receives the channel name.',
-                            ),
-                          ],
+                            ],
+                          ),
                         ),
                         style: OnboardingType.rowDetail,
                       ),
@@ -195,12 +198,10 @@ class _OnboardingSetupStepState extends State<OnboardingSetupStep> {
                     child: Padding(
                       padding: const EdgeInsets.only(bottom: 2),
                       child: _SwitchRow(
-                        title: 'Share crash logs and analytics',
+                        title: l.onboardingSetupCrashTitle,
                         accent: accent,
-                        detail: const Text(
-                          'Help improve ONSET by sending crash logs and '
-                          'analytics through Firebase, without your Twitch '
-                          'account or channels.',
+                        detail: Text(
+                          l.onboardingSetupCrashDetail,
                           style: OnboardingType.rowDetail,
                         ),
                         value: settings.shareCrashLogsAndAnalytics,
@@ -222,7 +223,7 @@ class _OnboardingSetupStepState extends State<OnboardingSetupStep> {
         primary: StepRise(
           order: tablet ? 6 : 5,
           child: OnboardingButton(
-            label: 'Next',
+            label: l.commonNext,
             accent: accent,
             trailing: OnboardingGlyphKind.arrowRight,
             onPressed: widget.onNext,
@@ -300,16 +301,18 @@ class _AccountPill extends StatelessWidget {
             Flexible(
               child: Text.rich(
                 TextSpan(
-                  text: 'Logged in as ',
-                  children: [
-                    TextSpan(
-                      text: name,
-                      style: const TextStyle(
-                        fontWeight: FontWeight.w700,
-                        color: OnboardingColors.text,
+                  children: l10nSpans(
+                    context.l10n.onboardingSetupLoggedInAs(name: l10nMark(0)),
+                    [
+                      TextSpan(
+                        text: name,
+                        style: const TextStyle(
+                          fontWeight: FontWeight.w700,
+                          color: OnboardingColors.text,
+                        ),
                       ),
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
@@ -341,11 +344,11 @@ class _AccountPill extends StatelessWidget {
               value: reduceMotionOf(context) ? 0.25 : null,
             ),
           );
-          content = const [
+          content = [
             Flexible(
               child: Text(
-                'Signing you in…',
-                style: TextStyle(
+                context.l10n.loginSigningIn,
+                style: const TextStyle(
                   fontSize: 13,
                   color: OnboardingColors.secondary,
                 ),
@@ -363,9 +366,8 @@ class _AccountPill extends StatelessWidget {
             Flexible(
               child: Text(
                 login == OnboardingLogin.failed
-                    ? 'Login failed · go back to try again, or log in later '
-                          'from Profile'
-                    : 'Not logged in · you can log in later from Profile',
+                    ? context.l10n.onboardingSetupLoginFailed
+                    : context.l10n.onboardingSetupNotLoggedIn,
                 style: const TextStyle(
                   fontSize: 13,
                   color: OnboardingColors.secondary,
@@ -427,11 +429,12 @@ class _Preview extends StatelessWidget {
     final stream = this.stream;
     final width = tablet ? 128.0 : 96.0;
     final height = tablet ? 72.0 : 54.0;
+    final l = context.l10n;
     final name = stream == null
-        ? 'A live channel'
+        ? l.onboardingSetupPreviewChannel
         : getReadableName(stream.userName, stream.userLogin);
     final detail = stream == null
-        ? 'Category · viewers'
+        ? l.onboardingSetupPreviewDetail
         : [
             if (stream.gameName.isNotEmpty) stream.gameName,
             formatViewers(stream.viewerCount, compact: false),
@@ -445,7 +448,7 @@ class _Preview extends StatelessWidget {
       color: text,
     );
     return Semantics(
-      label: 'Preview: $name, $detail',
+      label: l.onboardingSetupPreviewSemantics(name: name, detail: detail),
       excludeSemantics: true,
       child: AnimatedContainer(
         key: const Key('setup-preview'),
@@ -489,7 +492,9 @@ class _Preview extends StatelessWidget {
                       top: 5,
                       child: AnimatedContainer(
                         duration: duration,
-                        height: 16,
+                        // At least 16 dp, taller with large text: the
+                        // word never loses its top or bottom.
+                        constraints: const BoxConstraints(minHeight: 16),
                         padding: const EdgeInsets.symmetric(horizontal: 5),
                         decoration: BoxDecoration(
                           color: accent,
@@ -497,7 +502,7 @@ class _Preview extends StatelessWidget {
                         ),
                         alignment: Alignment.center,
                         child: Text(
-                          'LIVE',
+                          l.commonLiveBadge,
                           style: TextStyle(
                             fontSize: 9,
                             fontWeight: FontWeight.w800,
@@ -511,11 +516,24 @@ class _Preview extends StatelessWidget {
                 ),
               ),
             ),
+            // "Preview" on top, so the name and the detail have the row's
+            // whole width (French runs longer).
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 spacing: 2,
                 children: [
+                  AnimatedDefaultTextStyle(
+                    duration: duration,
+                    style: TextStyle(
+                      fontFamily: OnsetTokens.bodyFamily,
+                      fontSize: 10.5,
+                      fontWeight: FontWeight.w600,
+                      letterSpacing: 1.26,
+                      color: meta,
+                    ),
+                    child: Text(l.onboardingSetupPreviewBadge),
+                  ),
                   AnimatedDefaultTextStyle(
                     duration: duration,
                     style: textStyle,
@@ -534,27 +552,17 @@ class _Preview extends StatelessWidget {
                         color: meta,
                       ),
                     ),
+                    // The stand-in wraps rather than being cut; a live
+                    // channel's category can be long and is cut.
                     child: Text(
                       detail,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
+                      maxLines: stream == null ? null : 1,
+                      overflow: stream == null
+                          ? TextOverflow.visible
+                          : TextOverflow.ellipsis,
                     ),
                   ),
                 ],
-              ),
-            ),
-            Padding(
-              padding: const EdgeInsetsDirectional.only(end: 6),
-              child: AnimatedDefaultTextStyle(
-                duration: duration,
-                style: TextStyle(
-                  fontFamily: OnsetTokens.bodyFamily,
-                  fontSize: 10.5,
-                  fontWeight: FontWeight.w600,
-                  letterSpacing: 1.26,
-                  color: meta,
-                ),
-                child: const Text('PREVIEW'),
               ),
             ),
           ],
@@ -589,14 +597,15 @@ class _ThemeChoice extends StatelessWidget {
   final ThemeType value;
   final ValueChanged<ThemeType> onChanged;
 
-  static const _notes = [
-    'Follows your device',
-    'Light surfaces everywhere',
-    'Noir, the ONSET default',
-  ];
+  static String _note(AppLocalizations l, ThemeType theme) => switch (theme) {
+    ThemeType.system => l.onboardingSetupThemeSystemNote,
+    ThemeType.light => l.onboardingSetupThemeLightNote,
+    ThemeType.dark => l.onboardingSetupThemeDarkNote,
+  };
 
   @override
   Widget build(BuildContext context) {
+    final l = context.l10n;
     final reduce = reduceMotionOf(context);
     final slide = reduce ? Duration.zero : const Duration(milliseconds: 320);
     final tint = reduce
@@ -610,24 +619,32 @@ class _ThemeChoice extends StatelessWidget {
         Row(
           crossAxisAlignment: CrossAxisAlignment.baseline,
           textBaseline: TextBaseline.alphabetic,
+          spacing: 12,
           children: [
-            const Expanded(
-              child: Text('Theme', style: OnboardingType.rowTitle),
-            ),
-            Text(
-              _notes[index],
-              style: const TextStyle(
-                fontSize: 12,
-                color: OnboardingColors.tertiary,
+            Text(l.onboardingSetupThemeTitle, style: OnboardingType.rowTitle),
+            // The note takes the room the title leaves, on as many lines
+            // as large text needs.
+            Expanded(
+              child: Text(
+                _note(l, value),
+                textAlign: TextAlign.end,
+                style: const TextStyle(
+                  fontSize: 12,
+                  color: OnboardingColors.tertiary,
+                ),
               ),
             ),
           ],
         ),
         Semantics(
           container: true,
-          label: 'Theme',
+          label: l.onboardingSetupThemeTitle,
           child: Container(
-            height: 44,
+            // 44 dp, taller as large text needs (a 13 sp line and room).
+            height: math.max(
+              44,
+              MediaQuery.textScalerOf(context).scale(13) * 1.3 + 14,
+            ),
             padding: const EdgeInsets.all(3),
             decoration: BoxDecoration(
               color: OnboardingColors.raised,
@@ -682,7 +699,17 @@ class _ThemeChoice extends StatelessWidget {
                                       ? OnsetTokens.backgroundDark
                                       : OnboardingColors.body,
                                 ),
-                                child: Text(themeNames[theme.index]),
+                                // A label too wide for its third shrinks
+                                // rather than lose letters.
+                                child: Padding(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 6,
+                                  ),
+                                  child: FittedBox(
+                                    fit: BoxFit.scaleDown,
+                                    child: Text(theme.label(l), maxLines: 1),
+                                  ),
+                                ),
                               ),
                             ),
                           ),
@@ -711,20 +738,21 @@ class _AccentRow extends StatelessWidget {
     final hex = hexOf(accent);
     return Semantics(
       button: true,
-      label: 'Accent color, $hex',
+      label: context.l10n.accentColorSemantics(hex: hex),
       onTap: onTap,
       excludeSemantics: true,
       child: InkWell(
         onTap: onTap,
-        child: SizedBox(
-          height: 56,
+        // 56 dp, taller when large text wraps the title.
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(minHeight: 56),
           child: Row(
             spacing: 12,
             children: [
-              const Expanded(
+              Expanded(
                 child: Text(
-                  'Accent color',
-                  style: TextStyle(
+                  context.l10n.accentColorTitle,
+                  style: const TextStyle(
                     fontSize: 15,
                     fontWeight: FontWeight.w600,
                     color: OnboardingColors.text,

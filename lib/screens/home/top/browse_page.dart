@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_mobx/flutter_mobx.dart';
 import 'package:onset/apis/twitch_api.dart';
+import 'package:onset/l10n/l10n.dart';
 import 'package:onset/models/category.dart';
 import 'package:onset/screens/home/shell/shell_pages.dart';
 import 'package:onset/screens/home/stores/home_store.dart';
@@ -82,10 +83,10 @@ class _BrowsePageState extends State<BrowsePage> {
   }
 
   Widget _categoriesTab(BuildContext context) {
-    final media = MediaQuery.of(context);
+    final size = MediaQuery.sizeOf(context);
+    final padding = MediaQuery.paddingOf(context);
     final masterDetail =
-        context.isLargeScreen &&
-        media.size.width >= BrowsePage.masterDetailWidth;
+        context.isLargeScreen && size.width >= BrowsePage.masterDetailWidth;
     if (!masterDetail) {
       return Categories(
         key: _gridKey,
@@ -105,7 +106,7 @@ class _BrowsePageState extends State<BrowsePage> {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             SizedBox(
-              width: BrowsePage.railWidth + media.padding.left,
+              width: BrowsePage.railWidth + padding.left,
               child: MediaQuery.removePadding(
                 context: context,
                 removeRight: true,
@@ -123,7 +124,7 @@ class _BrowsePageState extends State<BrowsePage> {
               child: Padding(
                 padding: EdgeInsets.only(
                   top: 16,
-                  right: OnsetSpacing.gutterTablet + media.padding.right,
+                  right: OnsetSpacing.gutterTablet + padding.right,
                 ),
                 child: _CategoryPane(categoryId: selected),
               ),
@@ -252,20 +253,22 @@ class _LiveChannelsTitle extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final colors = FeedColors.of(context);
+    final l = context.l10n;
     return Semantics(
       header: true,
       child: Text.rich(
         TextSpan(
-          text: 'Live channels ',
-          children: [
+          // "Live channels" and, lighter, "across Twitch", where the
+          // language puts it.
+          children: l10nSpans(l.browseLiveChannels(where: l10nMark(0)), [
             TextSpan(
-              text: 'across Twitch',
+              text: l.browseAcrossTwitch,
               style: TextStyle(
                 fontWeight: FontWeight.w600,
                 color: colors.tertiary,
               ),
             ),
-          ],
+          ]),
         ),
         maxLines: 1,
         overflow: TextOverflow.ellipsis,

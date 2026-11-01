@@ -4,6 +4,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:mocktail/mocktail.dart';
 import 'package:onset/apis/twitch_clip_service.dart';
 import 'package:onset/apis/twitch_vod_service.dart';
+import 'package:onset/l10n/l10n.dart';
 import 'package:onset/models/channel_profile.dart';
 import 'package:onset/models/clip.dart';
 import 'package:onset/models/vod.dart';
@@ -37,6 +38,7 @@ class FakeReminderPlatform implements ReminderPlatform {
     required String title,
     required String body,
     required String payload,
+    required AppLocalizations l,
   }) async => scheduled.add(id);
 
   @override
@@ -190,12 +192,12 @@ void main() {
       // The next stream on top, and in its day.
       expect(find.text('Ranked'), findsNWidgets(2));
       expect(find.textContaining('Chess'), findsOneWidget);
-      expect(find.textContaining('Cancelled'), findsOneWidget);
+      expect(find.textContaining('Canceled'), findsOneWidget);
       expect(find.text('Wednesday, October 14'), findsOneWidget);
       expect(find.text('Thursday, October 15'), findsOneWidget);
     });
 
-    group('Remind Me', () {
+    group('Remind me', () {
       late FakeReminderPlatform platform;
       late ScheduleReminders reminders;
       final schedule = ChannelSchedule(
@@ -248,20 +250,20 @@ void main() {
       testWidgets('the next stream and each segment to come', (tester) async {
         await pump(tester);
         // The next stream's button, and a bell on the two to come.
-        expect(find.text('Remind Me'), findsOneWidget);
-        expect(find.byTooltip('Remind Me'), findsNWidgets(2));
+        expect(find.text('Remind me'), findsOneWidget);
+        expect(find.byTooltip('Remind me'), findsNWidgets(2));
 
-        await tester.tap(find.text('Remind Me'));
+        await tester.tap(find.text('Remind me'));
         await tester.pumpAndSettle();
-        expect(find.text('Reminder Set'), findsOneWidget);
-        expect(find.byTooltip('Reminder Set'), findsOneWidget);
+        expect(find.text('Reminder set'), findsOneWidget);
+        expect(find.byTooltip('Reminder set'), findsOneWidget);
         expect(reminders.isSet('a'), isTrue);
 
-        await tester.tap(find.byTooltip('Remind Me'));
+        await tester.tap(find.byTooltip('Remind me'));
         await tester.pumpAndSettle();
         expect(reminders.isSet('b'), isTrue);
 
-        await tester.tap(find.text('Reminder Set'));
+        await tester.tap(find.text('Reminder set'));
         await tester.pumpAndSettle();
         expect(reminders.isSet('a'), isFalse);
         expect(platform.scheduled, {reminderNoticeId('b')});
@@ -270,24 +272,24 @@ void main() {
       testWidgets('fits a narrow phone', (tester) async {
         await pump(tester, width: 280);
         expect(tester.takeException(), isNull);
-        expect(find.text('Remind Me'), findsOneWidget);
+        expect(find.text('Remind me'), findsOneWidget);
       });
 
       testWidgets('a refused right says where to allow it', (tester) async {
         platform.granted = false;
         await pump(tester);
-        await tester.tap(find.text('Remind Me'));
+        await tester.tap(find.text('Remind me'));
         await tester.pumpAndSettle();
         expect(find.textContaining('system settings'), findsOneWidget);
-        expect(find.text('Remind Me'), findsOneWidget);
+        expect(find.text('Remind me'), findsOneWidget);
       });
 
       testWidgets('nothing to tap without reminders', (tester) async {
         await tester.pumpWidget(
           _app(ProfileScheduleContent(schedule: schedule, now: now)),
         );
-        expect(find.text('Remind Me'), findsNothing);
-        expect(find.byTooltip('Remind Me'), findsNothing);
+        expect(find.text('Remind me'), findsNothing);
+        expect(find.byTooltip('Remind me'), findsNothing);
       });
     });
 
@@ -299,14 +301,28 @@ void main() {
     });
 
     test('starts in', () {
-      expect(formatStartsIn(now, now), 'now');
+      expect(formatStartsIn(now, now, L10n.english), 'starting now');
       expect(
-        formatStartsIn(now.add(const Duration(minutes: 1)), now),
+        formatStartsIn(now.add(const Duration(minutes: 1)), now, L10n.english),
         'in 1 minute',
       );
       expect(
-        formatStartsIn(now.add(const Duration(hours: 30)), now),
+        formatStartsIn(now.add(const Duration(hours: 30)), now, L10n.english),
         'in 1 day',
+      );
+      final french = lookupAppLocalizations(const Locale('fr'));
+      expect(formatStartsIn(now, now, french), 'imminent');
+      expect(
+        formatStartsIn(now.add(const Duration(minutes: 1)), now, french),
+        'dans 1\u00a0minute',
+      );
+      expect(
+        formatStartsIn(now.add(const Duration(hours: 3)), now, french),
+        'dans 3\u00a0heures',
+      );
+      expect(
+        formatStartsIn(now.add(const Duration(hours: 30)), now, french),
+        'dans 1\u00a0jour',
       );
     });
   });
@@ -511,7 +527,7 @@ void main() {
         greaterThan(tester.getRect(card).right),
       );
       expect(find.textContaining('GTA V'), findsOneWidget);
-      expect(find.text('Remind Me'), findsNWidgets(2));
+      expect(find.text('Remind me'), findsNWidgets(2));
       // Two rows of three.
       expect(find.byType(ProfileVideoTile), findsNWidgets(6));
       final tiles = tester

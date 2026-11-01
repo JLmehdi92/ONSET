@@ -26,6 +26,7 @@ import 'package:onset/apis/twitch_hype_train_service.dart';
 import 'package:onset/apis/twitch_vod_service.dart';
 import 'package:onset/apis/twitch_watch_streak_service.dart';
 import 'package:onset/apis/unauthorized_interceptor.dart';
+import 'package:onset/l10n/l10n.dart';
 import 'package:onset/models/clip.dart';
 import 'package:onset/models/vod.dart';
 import 'package:onset/screens/activity/stores/activity_store.dart';
@@ -47,12 +48,14 @@ import 'package:onset/services/go_live/go_live.dart';
 import 'package:onset/services/go_live/go_live_poller.dart';
 import 'package:onset/services/go_live/go_live_worker.dart';
 import 'package:onset/services/launch_info.dart';
+import 'package:onset/services/locale_bridge.dart';
 import 'package:onset/services/notifications/activity_log.dart';
 import 'package:onset/services/notifications/mention_alerts.dart';
 import 'package:onset/services/notifications/schedule_reminders.dart';
 import 'package:onset/services/onset_updater.dart';
 import 'package:onset/services/realtime/twitch_eventsub_client.dart';
 import 'package:onset/services/realtime/twitch_realtime_client.dart';
+import 'package:onset/services/settings_persistence.dart';
 import 'package:onset/services/telemetry.dart';
 import 'package:onset/services/telemetry_consent.dart';
 import 'package:onset/stores/global_assets_store.dart';
@@ -130,8 +133,27 @@ void main() async {
   // app's lifetime.
   syncFirebaseCollection(settingsStore);
 
-  // Create a MobX reaction that will save the settings on disk every time they are changed.
-  autorun((_) => prefs.setString('settings', jsonEncode(settingsStore)));
+  // Save the settings on disk when they change (gathered, not once per
+  // frame of a drag), and at once when the app leaves the screen. Kept for
+  // the app's lifetime.
+  persistSettings(
+    settingsStore,
+    (json) => unawaited(prefs.setString('settings', json)),
+  );
+
+  // Android 13+'s per-app language and the app's stay the same, both ways:
+  // one picked in the system meanwhile is adopted now and on each resume,
+  // one picked in the app is told to the system. Kept for the app's
+  // lifetime.
+  final adoptSystemLanguage = await syncSystemLanguage(
+    settingsStore,
+    LocaleBridge.shared,
+  );
+  reaction(
+    (_) => settingsStore.appLanguage,
+    (AppLanguage language) => unawaited(LocaleBridge.shared.push(language)),
+  );
+  AppLifecycleListener(onResume: () => unawaited(adoptSystemLanguage()));
 
   /// Initialize API services with a common Dio client.
   /// This will prevent every request from creating a new client instance.
@@ -263,7 +285,7 @@ void main() async {
   // Mentions in a connected chat while the app is not in front.
   MentionAlerts.shared = MentionAlerts(
     post: (notice) async {
-      await MentionNotifications.show(notice);
+      await MentionNotifications.show(notice, L10n.current);
       await activityStore.addAll([mentionEntry(notice, DateTime.now())]);
     },
     inFront: appInFront,
@@ -282,7 +304,7 @@ void main() async {
         prefs: await GoLivePrefs.load(),
         loggedIn: authStore.isLoggedIn,
         notify: (notices, more) async {
-          await GoLiveNotifications.show(notices, more);
+          await GoLiveNotifications.show(notices, more, L10n.current);
           final now = DateTime.now();
           await activityStore.addAll([
             for (final notice in notices) goLiveEntry(notice, now),
@@ -450,7 +472,9 @@ class _MyAppState extends State<MyApp> {
         ScaffoldMessenger.maybeOf(navigatorContext)
           ?..clearSnackBars()
           ..showSnackBar(
-            SnackBar(content: Text("You were mentioned in $login's chat")),
+            SnackBar(
+              content: Text(navigatorContext.l10n.mentionNotice(login: login)),
+            ),
           );
       case MentionTap.restoreMini:
         GlobalMiniPlayer.restore(mini);
@@ -496,7 +520,7 @@ class _MyAppState extends State<MyApp> {
     if (navigatorContext == null || !navigatorContext.mounted) return;
     await TwitchWebPage.open(
       navigatorContext,
-      title: link.name ?? 'Category',
+      title: link.name ?? navigatorContext.l10n.deepLinkCategoryFallback,
       url: twitchCategoryUrl(link),
     );
   }
@@ -568,6 +592,12 @@ class _MyAppState extends State<MyApp> {
 
         return MaterialApp(
           title: 'ONSET',
+          // The language picked, or the device's (resolveAppLocale).
+          locale: settingsStore.appLanguage.locale,
+          supportedLocales: AppLocalizations.supportedLocales,
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          localeListResolutionCallback: (device, _) =>
+              resolveAppLocale(AppLanguage.system, device ?? const []),
           theme: themes.light,
           darkTheme: themes.dark,
           themeMode: settingsStore.themeType == ThemeType.system
@@ -585,20 +615,36 @@ class _MyAppState extends State<MyApp> {
           navigatorKey: navigatorKey,
           // The launch intro covers the app on a cold start while it builds
           // and loads underneath.
-          builder: (context, child) => LaunchIntro(
-            play: widget.launchInfo.playsIntro,
-            fromTile: widget.launchInfo.nativeTile,
-            // The first run stops on the name: the onboarding picks it up
-            // from there.
-            holdOnName: widget.firstRun,
-            splashTile: LaunchInfo.splashTile,
-            // The tile lands on the header's mark.
-            slotKey: OnsetShell.markKey,
-            child: Stack(
-              children: [
-                ?child,
-                const Positioned.fill(child: GlobalMiniPlayer()),
-              ],
+          builder: (context, child) => LocaleSync(
+            // The language shown, for what runs without the app's widgets:
+            // the background check, the reminders the system keeps (worded
+            // again only when the language changed), the media
+            // notification.
+            onLocale: [
+              rememberUiLanguage(
+                onChanged: () async {
+                  await ScheduleReminders.shared?.reschedule();
+                },
+              ),
+              (_) => unawaited(
+                BackgroundAudio.shared.setLabels(mediaLabelsOf(L10n.current)),
+              ),
+            ],
+            child: LaunchIntro(
+              play: widget.launchInfo.playsIntro,
+              fromTile: widget.launchInfo.nativeTile,
+              // The first run stops on the name: the onboarding picks it up
+              // from there.
+              holdOnName: widget.firstRun,
+              splashTile: LaunchInfo.splashTile,
+              // The tile lands on the header's mark.
+              slotKey: OnsetShell.markKey,
+              child: Stack(
+                children: [
+                  ?child,
+                  const Positioned.fill(child: GlobalMiniPlayer()),
+                ],
+              ),
             ),
           ),
         );
@@ -642,12 +688,14 @@ class _MyAppState extends State<MyApp> {
       return;
     }
 
+    // In the language of the screen the snackbar shows over.
+    final l = (navigatorKey.currentContext ?? context).l10n;
     final failureSnackbar = SnackBar(
       content: AlertMessage(
-        message: 'Unable to navigate to \'$uri\'',
+        message: l.deepLinkFailed(uri: '$uri'),
         centered: false,
         trailingIcon: Icons.open_in_browser_rounded,
-        trailingTooltip: 'Open in browser',
+        trailingTooltip: l.deepLinkOpenInBrowser,
         // Fallback, allow user to open URL outside app
         onTrailingIconPressed: () async {
           await launchUrl(

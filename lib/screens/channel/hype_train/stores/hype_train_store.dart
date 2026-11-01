@@ -250,27 +250,17 @@ abstract class HypeTrainStoreBase with Store {
     return HtStyle.regular;
   }
 
-  /// One line for screen readers.
+  /// The time left as the screen-reader line names it (HtCopy.summaryLabel):
+  /// whole minutes, rounded up, from a minute ([minutes], [seconds] 0),
+  /// else the seconds ([minutes] 0). Computed, so the banner and the pill
+  /// that read it rebuild once a minute, not every countdown second, until
+  /// the last minute.
   @computed
-  String get semanticsSummary {
-    switch (_phase) {
-      case HtPhase.hidden:
-        return '';
-      case HtPhase.approaching:
-        return 'Hype Train approaching';
-      case HtPhase.ongoing:
-        // Minutes until the last one: a label that changes every second
-        // would keep screen readers busy.
-        final seconds = _remaining.inSeconds;
-        final time = seconds >= 60
-            ? '${(seconds / 60).ceil()} min'
-            : '$seconds seconds';
-        return 'Hype Train level $level, $percent percent, $time left';
-      case HtPhase.ending || HtPhase.rewards:
-        return 'Hype Train ended at level ${_endSummary?.level ?? level}';
-      case HtPhase.expired:
-        return 'Hype Train expired';
-    }
+  ({int minutes, int seconds}) get summaryTime {
+    final seconds = _remaining.inSeconds;
+    return seconds >= 60
+        ? (minutes: (seconds / 60).ceil(), seconds: 0)
+        : (minutes: 0, seconds: seconds);
   }
 
   // --- Presenter and lifecycle --------------------------------------------------

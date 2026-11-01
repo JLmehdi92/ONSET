@@ -1,4 +1,8 @@
+import 'dart:async';
+
+import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:onset/l10n/l10n.dart';
 import 'package:onset/models/channel_profile.dart';
 import 'package:onset/services/notifications/activity_log.dart';
 import 'package:onset/services/notifications/schedule_reminders.dart';
@@ -12,6 +16,13 @@ class FakeReminderPlatform implements ReminderPlatform {
       <int, ({DateTime at, String title, String body, String payload})>{};
   final cancelled = <int>[];
 
+  /// The language each notice's channel was named in.
+  final languages = <int, String>{};
+
+  /// Holds the next schedule until completed (then forgotten): the system
+  /// taking its time, to change a reminder meanwhile.
+  Completer<void>? holdNext;
+
   @override
   Future<bool> requestPermission() async => granted;
 
@@ -22,9 +33,14 @@ class FakeReminderPlatform implements ReminderPlatform {
     required String title,
     required String body,
     required String payload,
+    required AppLocalizations l,
   }) async {
     if (fail) throw StateError('alarm');
+    final hold = holdNext;
+    holdNext = null;
+    if (hold != null) await hold.future;
     scheduled[id] = (at: at, title: title, body: body, payload: payload);
+    languages[id] = l.localeName;
   }
 
   @override
@@ -78,7 +94,7 @@ void main() {
     expect(reminders.isSet('s1'), isTrue);
     final notice = platform.scheduled[reminderNoticeId('s1')]!;
     expect(notice.at, segment.startAt);
-    expect(notice.title, "Streamer's stream is starting");
+    expect(notice.title, 'Streamer’s stream is starting');
     expect(notice.body, 'Ranked · Chess');
     expect(notice.payload, 'streamer');
 
@@ -158,7 +174,7 @@ void main() {
       login: 'a',
       channelName: 'A',
     );
-    expect(platform.scheduled.values.single.body, 'Stream');
+    expect(platform.scheduled.values.single.body, 'Untitled stream');
   });
 
   test('past reminders are handed to Activity once, then forgotten', () async {
@@ -178,7 +194,7 @@ void main() {
     final entry = due.single;
     expect(entry.id, 'reminder:s1');
     expect(entry.kind, ActivityKind.reminder);
-    expect(entry.title, "Streamer's stream is starting");
+    expect(entry.title, 'Streamer’s stream is starting');
     expect(entry.login, 'streamer');
     expect(entry.at, _now.add(const Duration(minutes: 5)));
     expect(later.isSet('s1'), isFalse);
@@ -259,6 +275,127 @@ void main() {
     final damaged = await load();
     expect(damaged.isSet('x'), isFalse);
     expect(damaged.isSet('y'), isFalse);
+  });
+
+  test('a language change words the reminders to come again, the '
+      'ones that went off left as they were', () async {
+    var words = lookupAppLocalizations(const Locale('en'));
+    final local = ScheduleReminders(
+      prefs: await SharedPreferences.getInstance(),
+      platform: platform,
+      now: () => _now,
+      words: () => words,
+    );
+    await local.toggle(
+      _segment('s1'),
+      login: 'streamer',
+      channelName: 'Streamer',
+    );
+    await local.toggle(
+      _segment('s2', title: null, category: null),
+      login: 'streamer',
+      channelName: 'Streamer',
+    );
+    final id = reminderNoticeId('s1');
+    expect(platform.scheduled[id]!.title, 'Streamer’s stream is starting');
+    expect(platform.scheduled[id]!.body, 'Ranked · Chess');
+    expect(platform.languages[id], 'en');
+
+    words = lookupAppLocalizations(const Locale('fr'));
+    await local.reschedule();
+    expect(
+      platform.scheduled[id]!.title,
+      'Le live de la chaîne Streamer commence',
+    );
+    expect(platform.scheduled[id]!.body, 'Chess · Ranked');
+    expect(platform.languages[id], 'fr');
+    expect(platform.scheduled[reminderNoticeId('s2')]!.body, 'Live sans titre');
+    // The time and the tap stay the same.
+    expect(platform.scheduled[id]!.at, _now.add(const Duration(hours: 4)));
+    expect(platform.scheduled[id]!.payload, 'streamer');
+
+    // One that went off is not scheduled again.
+    platform.scheduled.clear();
+    final later = ScheduleReminders(
+      prefs: await SharedPreferences.getInstance(),
+      platform: platform,
+      now: () => _now.add(const Duration(days: 1)),
+      words: () => words,
+    );
+    await later.reschedule();
+    expect(platform.scheduled, isEmpty);
+  });
+
+  group('wording them again never undoes a change made meanwhile', () {
+    late ScheduleReminders local;
+    late ScheduleSegment segment;
+
+    setUp(() async {
+      local = ScheduleReminders(
+        prefs: await SharedPreferences.getInstance(),
+        platform: platform,
+        now: () => _now,
+        words: () => lookupAppLocalizations(const Locale('fr')),
+      );
+      segment = _segment('s1');
+      await local.toggle(segment, login: 'streamer', channelName: 'Streamer');
+    });
+
+    test('a reminder cancelled while its alarm is set again stays '
+        'cancelled', () async {
+      final held = platform.holdNext = Completer<void>();
+      final reworded = local.reschedule();
+      await pumpEventQueue();
+      // The viewer turns it off while the system takes its time.
+      final cleared = local.toggle(
+        segment,
+        login: 'streamer',
+        channelName: 'Streamer',
+      );
+      await pumpEventQueue();
+      held.complete();
+      await reworded;
+      expect(await cleared, ReminderResult.cleared);
+      expect(local.isSet('s1'), isFalse);
+      expect(platform.scheduled, isNot(contains(reminderNoticeId('s1'))));
+    });
+
+    test('a reminder moved while its alarm is set again goes off at the '
+        'new time', () async {
+      final held = platform.holdNext = Completer<void>();
+      final reworded = local.reschedule();
+      await pumpEventQueue();
+      // The schedule says it moved to later meanwhile.
+      final moved = _segment('s1', inFuture: const Duration(hours: 8));
+      final synced = local.sync('streamer', [moved]);
+      await pumpEventQueue();
+      held.complete();
+      await Future.wait([reworded, synced]);
+      expect(platform.scheduled[reminderNoticeId('s1')]!.at, moved.startAt);
+    });
+
+    test('changes run one at a time, in the order asked', () async {
+      final held = platform.holdNext = Completer<void>();
+      final reworded = local.reschedule();
+      final cleared = local.toggle(
+        segment,
+        login: 'streamer',
+        channelName: 'Streamer',
+      );
+      var taken = false;
+      final due = local.takeDue().then((_) => taken = true);
+      await pumpEventQueue();
+      // The system holds the rewording's alarm: the others wait for it.
+      expect(platform.cancelled, isEmpty);
+      expect(local.isSet('s1'), isTrue);
+      expect(taken, isFalse);
+      held.complete();
+      await Future.wait([reworded, cleared, due]);
+      // Worded again first, then cancelled.
+      expect(platform.cancelled, [reminderNoticeId('s1')]);
+      expect(platform.scheduled, isNot(contains(reminderNoticeId('s1'))));
+      expect(taken, isTrue);
+    });
   });
 
   test('notice ids are stable per segment and avoid the fixed ones', () {

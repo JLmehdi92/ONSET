@@ -1,3 +1,5 @@
+import 'dart:ui' show Locale;
+
 import 'package:json_annotation/json_annotation.dart';
 import 'package:mobx/mobx.dart';
 import 'package:onset/screens/channel/chat/stores/chat_tabs_store.dart';
@@ -9,6 +11,12 @@ part 'settings_store.g.dart';
 /// saved below it carry no choice the viewer made, and the setting is turned
 /// off when they load (see [SettingsStore.telemetryConsentVersion]).
 const kTelemetryConsentVersion = 1;
+
+/// The version of the one-time language question. Settings saved below it
+/// were saved by a build that never asked: Home asks once (a new install
+/// answers on the onboarding's Intro instead), see
+/// [SettingsStore.languagePromptVersion].
+const kLanguagePromptVersion = 1;
 
 @JsonSerializable()
 class SettingsStore extends _SettingsStoreBase with _$SettingsStore {
@@ -109,6 +117,34 @@ abstract class _SettingsStoreBase with Store {
   @observable
   var mentionNotifications = defaultMentionNotifications;
 
+  /// The language of the app: the device's ([AppLanguage.system]) or one
+  /// the viewer picked. Never reset with the other settings (a reset must
+  /// not change the language the viewer reads them in).
+  @JsonKey(
+    defaultValue: AppLanguage.system,
+    unknownEnumValue: AppLanguage.system,
+  )
+  @observable
+  var appLanguage = AppLanguage.system;
+
+  /// The language question version [appLanguage] was answered under (see
+  /// [kLanguagePromptVersion]). Settings saved without it read 0: Home asks
+  /// once. A new install starts at the current one and answers on the
+  /// onboarding's Intro. Never reset, like [appLanguage].
+  @JsonKey(defaultValue: 0)
+  @observable
+  var languagePromptVersion = kLanguagePromptVersion;
+
+  /// The viewer chose [language] (the onboarding, the one-time question):
+  /// the question is answered for good.
+  @action
+  void chooseLanguage(AppLanguage language) {
+    appLanguage = language;
+    languagePromptVersion = kLanguagePromptVersion;
+  }
+
+  // The language (appLanguage, languagePromptVersion) is kept out of this
+  // reset on purpose: see [appLanguage].
   @action
   void resetGeneralSettings() {
     themeType = defaultThemeType;
@@ -408,7 +444,7 @@ abstract class _SettingsStoreBase with Store {
   var animateEmotes = defaultAnimateEmotes;
 
   /// GIFs sent with Twitch's GIF keyboard are drawn in chat; off shows their
-  /// title instead (Twitch's "Show GIFs in Chat").
+  /// title instead (Twitch's "Show GIFs in chat").
   @JsonKey(defaultValue: defaultShowGifs)
   @observable
   var showGifs = defaultShowGifs;
@@ -693,7 +729,9 @@ abstract class _SettingsStoreBase with Store {
   /// "on" there is no consent. Settings saved without it read 0, are turned
   /// off once as they load (before anything reads the setting), and keep the
   /// viewer's choice from then on. A new install starts at the current one.
+  /// Observable so that a change is written to disk at once.
   @JsonKey(defaultValue: 0)
+  @observable
   var telemetryConsentVersion = kTelemetryConsentVersion;
 
   void _applyTelemetryConsentVersion() {
@@ -732,6 +770,8 @@ abstract class _SettingsStoreBase with Store {
     pinnedChannelIds = defaultPinnedChannelIds;
   }
 
+  /// Every setting back to its default, except the language (see
+  /// [appLanguage]).
   @action
   void resetAllSettings() {
     resetGeneralSettings();
@@ -742,58 +782,56 @@ abstract class _SettingsStoreBase with Store {
   }
 }
 
-const themeNames = ['System', 'Light', 'Dark'];
+/// The language of the app ([SettingsStore.appLanguage]).
+enum AppLanguage {
+  /// The device's: French on a French device, English otherwise
+  /// (resolveAppLocale in lib/l10n/l10n.dart).
+  system,
+  en,
+  fr;
+
+  /// The locale it forces, none for [system].
+  Locale? get locale => switch (this) {
+    system => null,
+    en => const Locale('en'),
+    fr => const Locale('fr'),
+  };
+}
 
 enum ThemeType { system, light, dark }
 
 /// Where the app opens ("Open the app on"): one of Home's top tabs, or
 /// Browse.
 enum HomeTab {
-  following('Following'),
-  live('Live'),
-  clips('Clips'),
-  browse('Browse');
-
-  const HomeTab(this.label);
-
-  final String label;
+  following,
+  live,
+  clips,
+  browse;
 
   /// The names saved before the navigation shell, and where they went: Top
   /// (top streams and categories) is Home's Live tab, Search lives in
   /// Browse.
-  static const legacyNames = {'top': 'live', 'search': 'browse'};
+  static final _legacyNames = Map<String, String>.unmodifiable({
+    'top': live.name,
+    'search': browse.name,
+  });
 
   /// Reads the saved start tab of [json], moving a value saved before the
   /// navigation shell to its new place.
   static Object? readStored(Map<dynamic, dynamic> json, String key) {
     final value = json[key];
-    return legacyNames[value] ?? value;
+    return _legacyNames[value] ?? value;
   }
 }
 
 /// How Following orders its live channels. Twitch's other order,
 /// "Recommended For You", is its own server ranking, which Helix does not
 /// give.
-enum FollowedSort {
-  viewers('Viewers (High to Low)'),
-  recent('Recently Started'),
-  name('Name (A-Z)'),
-  category('Category');
-
-  const FollowedSort(this.label);
-
-  final String label;
-}
-
-const timestampNames = ['Disabled', '12-hour', '24-hour'];
+enum FollowedSort { viewers, recent, name, category }
 
 enum TimestampType { disabled, twelve, twentyFour }
 
-const landscapeCutoutNames = ['None', 'Left', 'Right', 'Both'];
-
 enum LandscapeCutoutType { none, left, right, both }
-
-const liveCatchUpModeNames = ['Speed up', 'Jump to live'];
 
 /// How the IVS player returns to the live edge after falling behind.
 enum LiveCatchUpMode {
@@ -803,8 +841,6 @@ enum LiveCatchUpMode {
   /// Skips straight to the live edge after a rebuffer (previous behaviour).
   jumpToLive,
 }
-
-const bufferProfileNames = ['Standard', 'Ultra'];
 
 /// IVS low-latency buffer targets.
 enum BufferProfile {
@@ -819,26 +855,18 @@ enum BufferProfile {
 /// options and wording.
 enum VodAutoplay {
   /// Twitch's default.
-  always('Mobile data & Wi-Fi'),
-  wifiOnly('Wi-Fi Only'),
-  never('Never');
-
-  const VodAutoplay(this.label);
-
-  final String label;
+  always,
+  wifiOnly,
+  never,
 }
 
 /// How a celebration Twitch fires shows ("Celebrations on video").
 enum CelebrationsOnVideo {
   /// The animation plays over the channel.
-  full('Full'),
+  full,
 
   /// Nothing covers the video: a compact line in chat says it instead.
-  subtle('Subtle');
-
-  const CelebrationsOnVideo(this.label);
-
-  final String label;
+  subtle,
 }
 
 /// Which engine plays the live video.

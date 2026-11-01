@@ -8,6 +8,7 @@ import 'package:mobx/mobx.dart' show ObservableList;
 import 'package:mocktail/mocktail.dart';
 import 'package:onset/apis/twitch_api.dart';
 import 'package:onset/apis/twitch_stream_service.dart';
+import 'package:onset/l10n/l10n.dart';
 import 'package:onset/models/channel.dart';
 import 'package:onset/models/stream.dart';
 import 'package:onset/models/user.dart';
@@ -27,6 +28,8 @@ import 'package:onset/theme.dart';
 import 'package:onset/widgets/onset_photo_view_dialog.dart';
 import 'package:onset/widgets/user_actions_modal.dart';
 import 'package:provider/provider.dart';
+
+import '../../../helpers/l10n.dart';
 
 class MockTwitchApi extends Mock implements TwitchApi {}
 
@@ -182,10 +185,21 @@ void main() {
     ValueListenable<bool>? introRunning,
     Future<bool?> Function()? isMetered,
     Future<String> Function(String login, CancelToken cancel)? resolve,
+    Locale? locale,
+    double textScale = 1,
   }) async {
     tester.view.physicalSize = size;
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.reset);
+    final app = await localizedApp(
+      tester,
+      locale: locale,
+      textScale: textScale,
+      builder: (context, child) => MediaQuery(
+        data: MediaQuery.of(context).copyWith(disableAnimations: reduceMotion),
+        child: child!,
+      ),
+    );
     store = LiveFeedStore(
       authStore: auth,
       settingsStore: settings,
@@ -206,15 +220,13 @@ void main() {
           Provider<MiniPlayerStore>.value(value: mini),
         ],
         child: MaterialApp(
+          locale: app.locale,
+          supportedLocales: app.supportedLocales,
+          localizationsDelegates: app.delegates,
           theme: themes.light,
           darkTheme: themes.dark,
           themeMode: mode,
-          builder: (context, child) => MediaQuery(
-            data: MediaQuery.of(
-              context,
-            ).copyWith(disableAnimations: reduceMotion),
-            child: child!,
-          ),
+          builder: app.builder,
           home: Scaffold(
             body: ValueListenableBuilder<bool>(
               valueListenable: activeNotifier ?? ValueNotifier(active),
@@ -276,7 +288,7 @@ void main() {
           // The chips sit over the video on a phone (the tablet's are in
           // the shell's tab row).
           expect(find.text('All'), findsOneWidget);
-          expect(find.text('SWIPE UP FOR THE NEXT LIVE'), findsOneWidget);
+          expect(find.text('SWIPE UP FOR THE NEXT STREAM'), findsOneWidget);
         }
         await close(tester);
       });
@@ -308,7 +320,7 @@ void main() {
         await tester.tap(warning());
         await tester.pump();
         expect(find.text('Just one second…'), findsOneWidget);
-        expect(find.text('It may contain: Sexual Themes'), findsOneWidget);
+        expect(find.text('It may contain: Sexual themes'), findsOneWidget);
         expect(tester.takeException(), isNull);
         expect(log, isEmpty);
 
@@ -550,7 +562,7 @@ void main() {
     await tester.pump(const Duration(milliseconds: 500));
 
     expect(store.current!.userId, '2');
-    expect(find.text("You won't see Name 1 in Live for now"), findsOneWidget);
+    expect(find.text('You won’t see Name 1 in Live for now.'), findsOneWidget);
     await tester.pump(const Duration(seconds: 1));
     await tester.tap(find.text('Undo'));
     await tester.pump(const Duration(milliseconds: 500));
@@ -651,7 +663,7 @@ void main() {
     top = [];
     await pump(tester);
 
-    expect(find.text('No top streams'), findsOneWidget);
+    expect(find.text('No live streams right now'), findsOneWidget);
     expect(log, isEmpty);
     await close(tester);
   });
@@ -661,7 +673,7 @@ void main() {
   ) async {
     failure = Exception('down');
     await pump(tester);
-    expect(find.text('Something went wrong loading streams'), findsOneWidget);
+    expect(find.text('Couldn’t load streams.'), findsOneWidget);
 
     failure = null;
     await tester.tap(find.text('Try again'));
@@ -683,7 +695,7 @@ void main() {
     await tester.pump();
     await tester.pump(const Duration(seconds: 1));
 
-    expect(find.text('Back to the first'), findsOneWidget);
+    expect(find.text('Back to the top'), findsOneWidget);
     expect(log, ['open https://usher/login1', 'dispose https://usher/login1']);
     await close(tester);
   });
@@ -875,7 +887,7 @@ void main() {
     expect(
       find.descendant(
         of: find.byType(SnackBar),
-        matching: find.text('Something went wrong loading streams'),
+        matching: find.text('Couldn’t load streams.'),
       ),
       findsOneWidget,
     );
@@ -1000,10 +1012,76 @@ void main() {
   testWidgets('reduce motion: the hint stays still', (tester) async {
     await pump(tester, reduceMotion: true);
 
-    final hint = find.text('SWIPE UP FOR THE NEXT LIVE');
+    final hint = find.text('SWIPE UP FOR THE NEXT STREAM');
     final before = tester.getTopLeft(hint);
     await tester.pump(const Duration(milliseconds: 1200));
     expect(tester.getTopLeft(hint), before);
     await close(tester);
+  });
+
+  group('in French', () {
+    final french = lookupAppLocalizations(fr);
+
+    for (final (sizeName, size) in frenchScreenSizes) {
+      for (final scale in frenchTextScales) {
+        testWidgets('the feed, a warning and its cover, $sizeName, text '
+            '×$scale', (tester) async {
+          labels = {
+            '1': ['SexualThemes', 'Gambling'],
+          };
+          await pump(tester, size: size, locale: fr, textScale: scale);
+          await tester.pump(const Duration(seconds: 1));
+          // The first channel is labelled: its pill, then its warning.
+          final pill = find.text(french.liveFeedContentWarning);
+          expect(pill, findsOneWidget);
+          expect(tester.takeException(), isNull);
+          expect(englishLeaks(tester), isEmpty, reason: 'feed');
+          await tester.tap(pill.first);
+          await tester.pump();
+          expect(find.text(french.contentWarningTitle), findsOneWidget);
+          expect(
+            find.text(
+              french.contentWarningMayContain(
+                labels:
+                    '${french.contentLabelSexualThemes}, '
+                    '${french.contentLabelGambling}',
+              ),
+            ),
+            findsOneWidget,
+          );
+          expect(tester.takeException(), isNull);
+          expect(englishLeaks(tester), isEmpty, reason: 'warning cover');
+          // Back, then every page of the feed.
+          await tester.tap(find.text(french.contentWarningBack));
+          await tester.pump();
+          await expectFrenchThroughout(tester, 'feed');
+          await close(tester);
+        });
+      }
+    }
+
+    testWidgets('nobody live, a failure, and a hidden channel', (tester) async {
+      top = [];
+      await pump(tester, locale: fr);
+      expect(find.text(french.streamListEmptyTop), findsOneWidget);
+      await expectFrenchThroughout(tester, 'empty');
+      await close(tester);
+
+      top = [for (var i = 1; i <= 6; i++) _stream(i)];
+      failure = Exception('down');
+      await pump(tester, locale: fr);
+      expect(find.text(french.streamListLoadFailed), findsOneWidget);
+      await expectFrenchThroughout(tester, 'failed');
+      await close(tester);
+
+      failure = null;
+      await pump(tester, locale: fr);
+      await tester.tap(find.byTooltip(french.liveFeedNotInterested).first);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 500));
+      expect(find.textContaining('Name 1'), findsWidgets);
+      expect(englishLeaks(tester), isEmpty, reason: 'snackbar');
+      await close(tester);
+    });
   });
 }

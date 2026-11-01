@@ -4,6 +4,7 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:intl/date_symbol_data_local.dart';
 import 'package:onset/screens/settings/stores/settings_store.dart';
 import 'package:onset/screens/settings/widgets/release_notes.dart';
 import 'package:onset/screens/settings/widgets/release_notes_parts.dart';
@@ -173,7 +174,7 @@ void main() {
             updatedFrom: '1.0.2',
           );
           expect(tester.takeException(), isNull);
-          expect(find.text("WHAT'S NEW IN 1.1.0"), findsOneWidget);
+          expect(find.text('WHAT’S NEW IN 1.1.0'), findsOneWidget);
           expect(find.text('Updated to 1.1.0'), findsOneWidget);
           expect(find.textContaining('You were on'), findsOneWidget);
           expect(find.textContaining('1.0.2'), findsOneWidget);
@@ -210,16 +211,15 @@ void main() {
   });
 
   for (final size in _sizes) {
-    testWidgets('the bundled 1.0.0 notes fit '
+    testWidgets('the bundled notes fit '
         '${size.width.toInt()}×${size.height.toInt()}', (tester) async {
       final bundled = File('assets/release-notes.md').readAsStringSync();
       await open(tester, size: size, notes: bundled);
       expect(tester.takeException(), isNull);
-      expect(find.text('ONSET 1.0.0'), findsOneWidget);
-      expect(find.text('5 new · 2 improvements · 1 fix'), findsWidgets);
-      expect(find.text('EARLIER VERSIONS'), findsNothing);
-      expect(find.text('Newer'), findsNothing);
-      expect(find.text('Older'), findsNothing);
+      expect(find.text('ONSET 1.1.0'), findsOneWidget);
+      expect(find.text('1 new · 2 improvements · 1 fix'), findsWidgets);
+      // The 1.0.0 entry stays reachable below the newest one.
+      expect(find.text('v1.0.0', skipOffstage: false), findsWidgets);
     });
   }
 
@@ -228,7 +228,7 @@ void main() {
   ) async {
     await open(tester);
     // The header is 56 dp (no status bar in a test view).
-    expect(tester.getRect(find.text("WHAT'S NEW")).top, greaterThan(56));
+    expect(tester.getRect(find.text('WHAT’S NEW')).top, greaterThan(56));
     await open(tester, updatedTo: '1.1.0');
     expect(tester.getRect(find.byType(ReleaseFreshHero)).top, greaterThan(56));
   });
@@ -487,6 +487,21 @@ void main() {
       expect(find.text('ONSET 1.0.0'), findsOneWidget);
       expect(tester.takeException(), isNull);
     });
+
+    for (final size in [_landscape, _portrait]) {
+      testWidgets('the version list shows each date short, never cut '
+          '(${size.width.toInt()})', (tester) async {
+        // As the app's localization delegates do.
+        await initializeDateFormatting('en');
+        await open(tester, size: size);
+        for (final short in const ['Nov 12, 2026', 'Oct 20, 2026']) {
+          final date = tester.renderObject<RenderParagraph>(find.text(short));
+          expect(date.didExceedMaxLines, isFalse, reason: short);
+        }
+        // The details keep the whole date.
+        expect(find.text('November 12, 2026'), findsOneWidget);
+      });
+    }
 
     testWidgets('the chosen version survives rotation and resizing', (
       tester,

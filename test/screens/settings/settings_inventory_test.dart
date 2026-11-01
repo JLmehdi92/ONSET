@@ -4,6 +4,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mocktail/mocktail.dart';
 import 'package:onset/constants.dart';
+import 'package:onset/l10n/enum_labels.dart';
+import 'package:onset/l10n/l10n.dart';
 import 'package:onset/screens/channel/video/captions.dart';
 import 'package:onset/screens/settings/account/account_settings.dart';
 import 'package:onset/screens/settings/chat_settings.dart';
@@ -22,7 +24,7 @@ import 'settings_harness.dart';
 typedef SwitchRows = Map<String, bool Function(SettingsStore store)>;
 
 final SwitchRows _general = {
-  'Use large stream card': (s) => s.largeStreamCard,
+  'Use large stream cards': (s) => s.largeStreamCard,
   'Show thumbnail': (s) => s.showThumbnails,
   'Open links in external browser': (s) => s.launchUrlExternal,
 };
@@ -37,24 +39,24 @@ final SwitchRows _video = {
   'Keep screen awake': (s) => s.keepScreenAwake,
   'Background audio': (s) => s.backgroundAudio,
   'Use custom video overlay': (s) => s.showOverlay,
-  'Long-press player to toggle overlay': (s) => s.toggleableOverlay,
+  'Long-press the player to toggle the overlay': (s) => s.toggleableOverlay,
   'Show latency': (s) => s.showLatency,
   'Warn about mature content': (s) => s.warnMatureContent,
-  'Closed Captions': (s) => s.showCaptions,
+  'Closed captions': (s) => s.showCaptions,
 };
 
 final SwitchRows _chat = {
   'Show deleted messages': (s) => s.showDeletedMessages,
   'Animate emotes': (s) => s.animateEmotes,
   'Animated GIFs': (s) => s.animateGifs,
-  'Show GIFs in Chat': (s) => s.showGifs,
+  'Show GIFs in chat': (s) => s.showGifs,
   'Preview clips and videos': (s) => s.showLinkPreviews,
   'Show timeouts and bans': (s) => s.showModerationNotices,
   'Show message dividers': (s) => s.showChatMessageDividers,
   'Sync message delay and stream latency': (s) => s.autoSyncChatDelay,
   'Move emote menu button left': (s) => s.emoteMenuButtonOnLeft,
   'Persist chat tabs': (s) => s.persistChatTabs,
-  'Highlight first time chatters': (s) => s.highlightFirstTimeChatter,
+  'Highlight first-time chatters': (s) => s.highlightFirstTimeChatter,
   'Show notices': (s) => s.showUserNotices,
   'Collapse gift bombs': (s) => s.collapseGiftBombs,
   'Show Hype Trains': (s) => s.showHypeTrain,
@@ -141,7 +143,7 @@ void main() {
 
     // "Open the app on": the shell's places, never the old Top / Search.
     for (final tab in HomeTab.values) {
-      expect(find.text(tab.label), findsOneWidget);
+      expect(find.text(tab.label(L10n.english)), findsOneWidget);
     }
     await tapVisible(tester, find.text('Browse'));
     expect(settings.startTab, HomeTab.browse);
@@ -187,14 +189,12 @@ void main() {
     expect(settings.liveCatchUpMode, LiveCatchUpMode.jumpToLive);
     // Ultra is the default: the other choice must stick.
     expect(settings.bufferProfile, BufferProfile.ultra);
-    await tester.tap(find.text('Standard'));
-    await tester.pumpAndSettle();
+    await tapVisible(tester, find.text('Standard'));
     expect(settings.bufferProfile, BufferProfile.standard);
     expect(find.text('Twitch web token (2K)'), findsOneWidget);
 
     // The WebView fallback: IVS's own settings go.
-    await tester.tap(find.text('Low-latency player (Amazon IVS)'));
-    await tester.pumpAndSettle();
+    await tapVisible(tester, find.text('Low-latency player (Amazon IVS)'));
     expect(settings.playerEngine, PlayerEngine.twitchWeb);
     expect(find.text('Live catch-up'), findsNothing);
     expect(find.text('Buffer profile'), findsNothing);
@@ -220,7 +220,7 @@ void main() {
       'Low-latency player (Amazon IVS)',
       'Use fast video rendering',
       'Background audio',
-      'Closed Captions',
+      'Closed captions',
     ]) {
       expect(find.text(title), findsNothing, reason: title);
     }
@@ -415,10 +415,16 @@ void main() {
 
     expect(find.byType(LicensePage), findsOneWidget);
     expect(find.text('ONSET'), findsWidgets);
-    expect(find.text(onsetLegalese), findsOneWidget);
-    expect(onsetLegalese, contains('GNU AGPL-3.0-or-later'));
-    expect(onsetLegalese, contains('NO WARRANTY'));
-    expect(onsetLegalese, contains(onsetRepoUrl));
+    final legalese = onsetLegalese(L10n.english);
+    expect(find.text(legalese), findsOneWidget);
+    expect(legalese, contains('GNU AGPL-3.0-or-later'));
+    expect(legalese, contains('NO WARRANTY'));
+    expect(legalese, contains(onsetRepoUrl));
+    // The French notice names the same licence and repository.
+    final french = onsetLegalese(lookupAppLocalizations(const Locale('fr')));
+    expect(french, contains('GNU AGPL-3.0-or-later'));
+    expect(french, contains('SANS AUCUNE GARANTIE'));
+    expect(french, contains(onsetRepoUrl));
   });
 
   test('the source code link is ONSET\'s repository', () {

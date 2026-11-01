@@ -1,4 +1,5 @@
 import 'package:flutter/foundation.dart';
+import 'package:onset/l10n/l10n.dart';
 import 'package:onset/models/user_notice.dart';
 import 'package:onset/models/user_notice_text.dart';
 
@@ -9,9 +10,15 @@ class GiftBomb {
   /// The id its header and gifts share (see [UserNotice.giftBombKey]).
   final String key;
 
-  /// The gifter's name, as Twitch shows it.
+  /// The gifter's name, as Twitch shows it; empty for an anonymous one
+  /// ([gifter] names them).
   final String gifterName;
   final bool isAnonymous;
+
+  /// Who gives the subs, in [l]'s language: the gifter's name, or
+  /// « Anonyme » for an anonymous one.
+  String gifter(AppLocalizations l) =>
+      isAnonymous ? l.chatAnonymousGifter : gifterName;
 
   /// How many subs the header announced.
   final int count;
@@ -87,7 +94,9 @@ class GiftBomb {
   );
 
   @override
-  String toString() => 'GiftBomb($key, $gifterName, $count, $received)';
+  String toString() =>
+      'GiftBomb($key, ${isAnonymous ? '(anonymous)' : gifterName}, $count, '
+      '$received)';
 }
 
 /// A gift bomb pinned above chat, from [startedAt] until [endsAt] (Twitch
@@ -196,7 +205,7 @@ class GiftBombTracker {
       final bomb = GiftBomb(
         key: key ?? '',
         gifterName: notice.isAnonymous
-            ? 'An anonymous gifter'
+            ? ''
             : readableNoticeName(
                 notice.displayName ?? notice.login ?? '',
                 notice.login,

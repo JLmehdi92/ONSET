@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_mobx/flutter_mobx.dart';
 import 'package:mobx/mobx.dart';
+import 'package:onset/l10n/l10n.dart';
 import 'package:onset/screens/settings/account/account_settings.dart';
 import 'package:onset/screens/whispers/whisper_conversation.dart';
 import 'package:onset/screens/whispers/whisper_kit.dart';
@@ -400,24 +401,31 @@ class _WhispersScreenState extends State<WhispersScreen>
                         onPressed: () => Navigator.maybePop(context),
                       ),
                       const SizedBox(width: 4),
+                      // Smaller rather than cut in a narrow column at large
+                      // text: the title stays whole.
                       Expanded(
                         child: Semantics(
                           header: true,
-                          child: Text(
-                            'Whispers',
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: TextStyle(
-                              fontSize: 26,
-                              fontWeight: FontWeight.w800,
-                              letterSpacing: -0.78,
-                              color: colors.text,
+                          child: FittedBox(
+                            fit: BoxFit.scaleDown,
+                            alignment: AlignmentDirectional.centerStart,
+                            child: Text(
+                              context.l10n.whispersTitle,
+                              maxLines: 1,
+                              style: TextStyle(
+                                fontSize: 26,
+                                fontWeight: FontWeight.w800,
+                                letterSpacing: -0.78,
+                                color: colors.text,
+                              ),
                             ),
                           ),
                         ),
                       ),
                       Text(
-                        unread > 0 ? '$unread unread' : 'All read',
+                        unread > 0
+                            ? context.l10n.whispersUnreadCount(count: unread)
+                            : context.l10n.whispersAllRead,
                         style: OnsetType.tabular(
                           TextStyle(
                             fontSize: 13,
@@ -472,8 +480,8 @@ class _WhispersScreenState extends State<WhispersScreen>
                     ? _conversation(selected, pane: true)
                     : threads.isEmpty
                     ? const _NoWhispers()
-                    : const FeedStatusView.empty(
-                        message: 'Choose a conversation',
+                    : FeedStatusView.empty(
+                        message: context.l10n.whispersChoose,
                         glyph: StateGlyphKind.whisper,
                       ),
               ),
@@ -523,18 +531,22 @@ class _ListPage extends StatelessWidget {
                   onPressed: () => Navigator.maybePop(context),
                 ),
                 const SizedBox(width: 2),
+                // Smaller rather than cut in a narrow column at large text.
                 Expanded(
                   child: Semantics(
                     header: true,
-                    child: Text(
-                      'Whispers',
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        fontSize: 20,
-                        fontWeight: FontWeight.w700,
-                        letterSpacing: -0.4,
-                        color: colors.text,
+                    child: FittedBox(
+                      fit: BoxFit.scaleDown,
+                      alignment: AlignmentDirectional.centerStart,
+                      child: Text(
+                        context.l10n.whispersTitle,
+                        maxLines: 1,
+                        style: TextStyle(
+                          fontSize: 20,
+                          fontWeight: FontWeight.w700,
+                          letterSpacing: -0.4,
+                          color: colors.text,
+                        ),
                       ),
                     ),
                   ),
@@ -561,9 +573,9 @@ class _NoWhispers extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return const FeedStatusView.empty(
-      message: 'No whispers yet',
-      detail: 'Whispers you get while the app is open show up here.',
+    return FeedStatusView.empty(
+      message: context.l10n.whispersEmpty,
+      detail: context.l10n.whispersEmptyDetail,
       glyph: StateGlyphKind.whisper,
     );
   }
@@ -584,7 +596,7 @@ class _LoggedOut extends StatelessWidget {
           Center(
             child: SingleChildScrollView(
               child: FeedStatusView.signIn(
-                message: whisperStatusHint(WhisperStatus.off)!,
+                message: whisperStatusHint(WhisperStatus.off, context.l10n)!,
                 onConnect: () => openLogin(context),
               ),
             ),

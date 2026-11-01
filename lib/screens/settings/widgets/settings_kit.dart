@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:onset/l10n/l10n.dart';
 import 'package:onset/screens/settings/widgets/settings_glyph.dart';
 import 'package:onset/theme.dart';
 import 'package:onset/utils/context_extensions.dart';
@@ -501,11 +502,12 @@ class SettingsRow extends StatelessWidget {
         ),
         if (value != null && value.isNotEmpty)
           ConstrainedBox(
-            // The 46 % of the row at most.
+            // The 46 % of the row at most, on two lines when it needs them
+            // (« Toutes les langues » at large text).
             constraints: BoxConstraints(maxWidth: rowWidth * 0.46),
             child: Text(
               value,
-              maxLines: 1,
+              maxLines: 2,
               overflow: TextOverflow.ellipsis,
               textAlign: TextAlign.right,
               style: SettingsText.value.copyWith(color: colors.secondary),
@@ -633,10 +635,13 @@ class SettingsButton extends StatelessWidget {
           ? FontWeight.w600
           : FontWeight.w700,
     );
+    // Two lines where one does not hold the words (a narrow column, large
+    // text): a button never loses its words.
     final label = Text(
       this.label,
-      maxLines: 1,
+      maxLines: 2,
       overflow: TextOverflow.ellipsis,
+      textAlign: TextAlign.center,
     );
     return FilledButton(
       onPressed: onPressed,
@@ -769,7 +774,7 @@ Future<bool> confirmSettingsAction(
       message: message,
       actions: [
         SettingsButton(
-          label: 'Cancel',
+          label: context.l10n.commonCancel,
           onPressed: () => Navigator.pop(context, false),
         ),
         SettingsButton(
